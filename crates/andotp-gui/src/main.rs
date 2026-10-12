@@ -1,0 +1,36 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use andotp_gui::AndOtpApp;
+use andotp_gui::renderer::Renderer;
+
+fn main() -> eframe::Result {
+    let renderer = Renderer::load();
+    let options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("andOTP")
+            .with_app_id("org.shadowice.andotp")
+            .with_inner_size([440.0, 680.0])
+            .with_min_inner_size([360.0, 420.0]),
+        renderer: renderer.to_eframe(),
+        ..Default::default()
+    };
+    // Same override as the command-line client.
+    let vault = std::env::var_os("ANDOTP_VAULT").map(std::path::PathBuf::from);
+    let result = eframe::run_native(
+        "andOTP",
+        options,
+        Box::new(move |cc| {
+            let mut app = AndOtpApp::new(cc);
+            if let Some(path) = vault {
+                app.set_vault_path(path);
+            }
+            Ok(Box::new(app))
+        }),
+    );
+    if result.is_err() && renderer == Renderer::Wgpu {
+        // Make the next start work again without the user having to edit files.
+        let _ = Renderer::Glow.save();
+        eprintln!("The wgpu renderer failed to start; andOTP will use OpenGL from the next start on.");
+    }
+    result
+}

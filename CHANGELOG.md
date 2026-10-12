@@ -1,5 +1,35 @@
 # Changelog
 
+#### v1.0.0 (Rust rewrite)
+
+ * Rewrote andOTP in Rust as a Cargo workspace: `andotp-core` (library), `andotp-cli` (command line) and `andotp-gui` (desktop app built on egui)
+ * Moved the unmaintained Android app to `legacy/android`
+ * Same algorithms as before: TOTP, HOTP, Steam and mOTP
+ * Full backup compatibility with andOTP for Android: imports plain-text, password-protected and old password-protected backups; exports plain-text and password-protected backups
+ * New: the encrypted desktop vault uses the andOTP password-protected backup format, with atomic saves and a `.bck` copy of the previous version
+ * New: QR codes for any account (in the terminal and the desktop app), plus scanning QR codes from image files
+ * New: auto-lock after inactivity, hide-until-clicked tokens and digit grouping in the desktop app
+ * Improvement: 600 000+ PBKDF2 iterations for newly written encrypted files
+ * Improvement: more tolerant `otpauth://` parsing (parameter names in any case, issuer taken from the label prefix)
+ * Improvement: keys, passwords and decrypted data are zeroized after use; secrets are redacted from debug output
+ * Bugfix: corrupt encrypted files can no longer stall the import with a huge iteration count
+ * New: unlock with the system keychain (replaces Android KeyStore)
+ * New: type codes into the last used window (replaces auto-fill)
+ * New: automatic encrypted backups after every change, with pruning, plus `andotp backup` for scheduled backups (replaces Tasker broadcasts)
+ * New: panic wipe in the desktop app and `andotp panic`
+ * New: webcam QR code scanning (optional `webcam` feature, on by default)
+ * New: OpenGL or wgpu renderer, selectable in the settings or with `ANDOTP_RENDERER`
+ * New: logos for about 350 known services (the original andOTP thumbnails, converted to SVG and bundled; `tools/vector2svg.py`)
+ * New: account cards redesigned for phones (two lines, tap to copy, larger touch targets)
+ * New: redesigned Add account dialog (Camera / Image / Paste link at the top, advanced options folded away) and a single Export dialog with an encrypted or plain-text choice
+ * New: Mantine-style look: Mantine's light and dark palettes, the Inter font (bundled, Latin subset), 36 px bordered inputs, filled primary buttons, radio cards and padded modals
+ * New: compact Mantine-style dialogs everywhere: settings grouped into sections with switches and segmented controls, labelled password fields, red buttons for destructive actions, Mantine-style top bar
+ * New: Android fingerprint unlock (Android 11+): the vault password is kept encrypted with an Android Keystore key that needs a strong biometric for every use and is invalidated when fingerprints change; turn it on in Settings
+ * New: Android camera QR scanning (Camera2; the camera permission is asked for only when scanning). The preview runs independently of QR decoding, which works on the newest frame only
+ * Bugfix: Android: the keyboard closed again when the backup password dialog opened after the file picker
+ * Bugfix: the `Charles_Schwab` thumbnail name was missing from the service list
+ * New: Android app built from the same Rust UI, with the system file picker for import/export, QR scanning from images and a sensitive clipboard; CI builds the APK and checks it on an emulator
+
 #### v0.9.0.1
 
  * Bugfix: Fix crash when using the tags drawer (Issue #856)

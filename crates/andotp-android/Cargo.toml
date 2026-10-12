@@ -1,0 +1,19 @@
+[package]
+name = "andotp-android"
+description = "Android entry point of the andOTP app (built into the APK as libandotp_android.so)"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.95"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+andotp-gui = { path = "../andotp-gui", default-features = false }
+winit = { version = "0.30", features = ["android-native-activity"] }
+android_logger = { version = "0.15", default-features = false }
+log = "0.4"
