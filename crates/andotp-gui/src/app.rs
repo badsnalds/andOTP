@@ -35,22 +35,54 @@ const WIPE_CONFIRMATION: &str = "DELETE";
 /// Desktop-only features (keychain, typing into other windows, file dialogs, renderer choice).
 const DESKTOP: bool = cfg!(not(target_os = "android"));
 
-/// Android stand-ins for desktop APIs, so the shared code compiles unchanged. The UI hides the
-/// corresponding features (see [`DESKTOP`]); file access goes through the system picker instead.
 #[cfg(target_os = "android")]
 mod keychain {
+    //! On Android the "keychain" is fingerprint unlock: the password is kept encrypted with a
+    //! Keystore key that only a strong biometric check releases (see `MainActivity`).
     use std::path::Path;
-    pub fn load(_: &Path) -> Result<Option<zeroize::Zeroizing<String>>, String> {
-        Ok(None)
+    use std::time::{Duration, Instant};
+
+    use zeroize::Zeroizing;
+
+    use crate::android;
+
+    /// Shows the fingerprint prompt and waits for it (call from a worker thread).
+    pub fn load(_: &Path) -> Result<Option<Zeroizing<String>>, String> {
+        if !android::biometric_enabled() {
+            return Ok(None);
+        }
+        android::biometric_unlock()?;
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(300) {
+            match android::take_biometric_result() {
+                Some(Ok(password)) => return Ok(Some(password)),
+                Some(Err(Some(err))) => return Err(err),
+                Some(Err(None)) => return Err(CANCELLED.into()),
+                None => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        Err("Fingerprint unlock timed out".into())
     }
-    pub fn store(_: &Path, _: &str) -> Result<(), String> {
-        Err("The system keychain is not available on Android".into())
+
+    /// Starts storing the password; the fingerprint prompt reports the outcome as a message.
+    pub fn store(_: &Path, password: &str) -> Result<(), String> {
+        if !android::biometric_available() {
+            return Err("Fingerprint unlock needs Android 11 or later and an enrolled fingerprint".into());
+        }
+        android::biometric_enroll(password)
     }
+
     pub fn delete(_: &Path) -> Result<(), String> {
+        android::biometric_disable();
         Ok(())
     }
+
+    /// Returned by [`load`] when the user chose to type the password instead.
+    pub const CANCELLED: &str = "Fingerprint unlock cancelled";
 }
 
+/// Android stand-ins for desktop APIs, so the shared code compiles unchanged. The UI hides the
+/// corresponding features (see [`DESKTOP`]); file access goes through the system picker instead.
 #[cfg(target_os = "android")]
 mod rfd {
     use std::path::PathBuf;
@@ -346,7 +378,12 @@ impl AndOtpApp {
                     return;
                 }
                 Ok(Err(err)) => {
-                    lock.error = Some(err);
+                    // Choosing "Use password" in the fingerprint prompt is not an error.
+                    #[cfg(target_os = "android")]
+                    let err = Some(err).filter(|e| e != keychain::CANCELLED);
+                    #[cfg(not(target_os = "android"))]
+                    let err = Some(err);
+                    lock.error = err;
                     lock.pending = None;
                 }
                 Err(_) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
@@ -355,7 +392,7 @@ impl AndOtpApp {
 
         // Unlock from the system keychain once at start-up (not after an auto-lock, which would
         // defeat its purpose).
-        let use_keychain = exists && self.settings.keychain;
+        let use_keychain = exists && remembered_unlock(&self.settings);
         if use_keychain && !self.keychain_tried && lock.pending.is_none() {
             self.keychain_tried = true;
             lock.pending = Some(spawn_keychain_unlock(ui.ctx(), path.clone()));
@@ -410,10 +447,9 @@ impl AndOtpApp {
                     let label = if exists { "Unlock" } else { "Create vault" };
                     submit |= ui.add_sized([width, 40.0], style::primary(ui, label)).clicked();
                 }
-                if use_keychain
-                    && !busy
-                    && ui.add_sized([width, 28.0], egui::Button::new("🔑 Unlock with system keychain")).clicked()
-                {
+                let keychain_label =
+                    if DESKTOP { "🔑 Unlock with system keychain" } else { "👆 Unlock with fingerprint" };
+                if use_keychain && !busy && ui.add_sized([width, 36.0], style::secondary(keychain_label)).clicked() {
                     lock.error = None;
                     lock.pending = Some(spawn_keychain_unlock(ui.ctx(), path.clone()));
                 }
@@ -722,6 +758,18 @@ impl AndOtpApp {
             self.lock();
         }
     }
+}
+
+/// Whether the vault password is remembered: in the system keychain on desktop, for fingerprint
+/// unlock on Android.
+fn remembered_unlock(settings: &Settings) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        let _ = settings;
+        crate::android::biometric_enabled()
+    }
+    #[cfg(not(target_os = "android"))]
+    settings.keychain
 }
 
 fn spawn_keychain_unlock(ctx: &egui::Context, path: PathBuf) -> Receiver<Result<Vault, String>> {
@@ -1246,7 +1294,7 @@ fn dialog_ui(
                             match session.vault.change_password(password) {
                                 Ok(()) => {
                                     let mut text = "Password changed".to_owned();
-                                    if settings.keychain
+                                    if remembered_unlock(settings)
                                         && let Err(err) = keychain::store(session.vault.path(), password)
                                     {
                                         text = format!("Password changed, but the keychain update failed: {err}");
@@ -1291,6 +1339,26 @@ fn dialog_ui(
                 style::setting_row(ui, "Previous token", "Also show the token of the last period", 40.0, |ui| {
                     style::switch(ui, &mut settings.show_previous, "Previous token")
                 });
+                // Android: fingerprint unlock, the counterpart of the desktop keychain.
+                #[cfg(target_os = "android")]
+                if crate::android::biometric_available() || crate::android::biometric_enabled() {
+                    let mut on = crate::android::biometric_enabled();
+                    let toggled = style::setting_row(
+                        ui,
+                        "Fingerprint unlock",
+                        "Unlock with your fingerprint instead of typing the password",
+                        40.0,
+                        |ui| style::switch(ui, &mut on, "Fingerprint unlock").changed(),
+                    );
+                    if toggled {
+                        if on {
+                            open_keychain_dialog = true;
+                        } else {
+                            let _ = keychain::delete(session.vault.path());
+                            message = Some(("Fingerprint unlock is off".into(), false));
+                        }
+                    }
+                }
                 // Desktop only: on Android these need platform services we do not use.
                 if DESKTOP {
                     let mut keychain_on = settings.keychain;
@@ -1372,12 +1440,21 @@ fn dialog_ui(
                 });
             }
             Dialog::KeychainEnable { password, error } => {
-                style::header(
-                    ui,
-                    "Unlock with the system keychain",
-                    "Your vault password is stored in the operating system's credential store, so andOTP \
-                     can unlock without asking while you are logged in.",
-                );
+                if DESKTOP {
+                    style::header(
+                        ui,
+                        "Unlock with the system keychain",
+                        "Your vault password is stored in the operating system's credential store, so andOTP \
+                         can unlock without asking while you are logged in.",
+                    );
+                } else {
+                    style::header(
+                        ui,
+                        "Fingerprint unlock",
+                        "Your vault password is stored encrypted on this phone and released only after a \
+                         fingerprint check. The password keeps working too.",
+                    );
+                }
                 style::label(ui, "Vault password");
                 let edit = ui.add(style::text_field(&mut **password).password(true));
                 if let Some(err) = error {
@@ -1393,7 +1470,10 @@ fn dialog_ui(
                             Ok(_) => match keychain::store(&path, password) {
                                 Ok(()) => {
                                     settings.keychain = true;
-                                    message = Some(("Password stored in the system keychain".into(), false));
+                                    // Android: the fingerprint prompt opens now and reports the result.
+                                    if DESKTOP {
+                                        message = Some(("Password stored in the system keychain".into(), false));
+                                    }
                                     close = true;
                                 }
                                 Err(err) => *error = Some(err.to_string()),

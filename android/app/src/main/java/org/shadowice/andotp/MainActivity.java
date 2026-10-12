@@ -9,6 +9,8 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.ImageFormat;
+import android.hardware.biometrics.BiometricManager;
+import android.hardware.biometrics.BiometricPrompt;
 import android.graphics.Insets;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -22,21 +24,34 @@ import android.media.ImageReader;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.PersistableBundle;
 import android.provider.OpenableColumns;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyPermanentlyInvalidatedException;
+import android.security.keystore.KeyProperties;
 import android.util.Size;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.security.KeyStore;
 import java.util.Collections;
+
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 
 /**
  * Hosts the Rust/egui app (libandotp_android.so) and provides the Android services it cannot
@@ -68,6 +83,13 @@ public class MainActivity extends NativeActivity {
     private int sensorRotation;
     private byte[] cameraFrame;
     private String cameraError;
+
+    // Fingerprint unlock: the vault password, encrypted with a Keystore key that needs a strong
+    // biometric for every use, lives in BIOMETRIC_FILE. Results are polled from Rust.
+    private static final String BIOMETRIC_KEY = "andotp-vault-password";
+    private static final String BIOMETRIC_FILE = "biometric.bin";
+    private byte[] biometricPassword;
+    private String biometricError;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -471,6 +493,186 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    /** Whether this device can do fingerprint unlock (Android 11+ with a strong biometric enrolled). */
+    public boolean biometricAvailable() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return false;
+        }
+        BiometricManager manager = getSystemService(BiometricManager.class);
+        return manager != null
+                && manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS;
+    }
+
+    /** Whether a password is stored for fingerprint unlock. */
+    public boolean biometricEnabled() {
+        return new File(getFilesDir(), BIOMETRIC_FILE).exists();
+    }
+
+    /** Forgets the stored password and its key. */
+    public void biometricDisable() {
+        new File(getFilesDir(), BIOMETRIC_FILE).delete();
+        try {
+            KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+            keyStore.load(null);
+            keyStore.deleteEntry(BIOMETRIC_KEY);
+        } catch (Exception ignored) {
+            // Nothing stored.
+        }
+    }
+
+    /**
+     * Stores {@code password} for fingerprint unlock after a fingerprint check. The outcome is
+     * reported via {@link #takeMessage}. The array is wiped.
+     */
+    public void biometricEnroll(byte[] password) {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                Arrays.fill(password, (byte) 0);
+                post("!Fingerprint unlock needs Android 11 or later");
+                return;
+            }
+            Cipher cipher;
+            try {
+                biometricDisable();
+                KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+                generator.init(new KeyGenParameterSpec.Builder(BIOMETRIC_KEY,
+                        KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .setUserAuthenticationRequired(true)
+                        .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+                        .setInvalidatedByBiometricEnrollment(true)
+                        .build());
+                SecretKey key = generator.generateKey();
+                cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                cipher.init(Cipher.ENCRYPT_MODE, key);
+            } catch (Exception e) {
+                Arrays.fill(password, (byte) 0);
+                post("!Cannot set up fingerprint unlock: " + e.getMessage());
+                return;
+            }
+            authenticate(cipher, "Turn on fingerprint unlock", new BiometricPrompt.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                    try {
+                        Cipher c = result.getCryptoObject().getCipher();
+                        byte[] encrypted = c.doFinal(password);
+                        byte[] iv = c.getIV();
+                        try (FileOutputStream out = new FileOutputStream(new File(getFilesDir(), BIOMETRIC_FILE))) {
+                            out.write(iv.length);
+                            out.write(iv);
+                            out.write(encrypted);
+                        }
+                        post("Fingerprint unlock is on");
+                    } catch (Exception e) {
+                        biometricDisable();
+                        post("!Cannot set up fingerprint unlock: " + e.getMessage());
+                    } finally {
+                        Arrays.fill(password, (byte) 0);
+                    }
+                }
+
+                @Override
+                public void onAuthenticationError(int code, CharSequence message) {
+                    Arrays.fill(password, (byte) 0);
+                    post(isCancel(code) ? "-cancelled" : "!" + message);
+                }
+            }, () -> {
+                Arrays.fill(password, (byte) 0);
+                post("-cancelled");
+            });
+        });
+    }
+
+    /** Asks for a fingerprint and decrypts the stored password; poll {@link #takeBiometricPassword}. */
+    public void biometricUnlock() {
+        runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                biometricFailed("Fingerprint unlock needs Android 11 or later");
+                return;
+            }
+            Cipher cipher;
+            byte[] encrypted;
+            try {
+                byte[] file;
+                try (InputStream in = new FileInputStream(new File(getFilesDir(), BIOMETRIC_FILE))) {
+                    file = readStream(in);
+                }
+                int ivLength = file[0];
+                byte[] iv = Arrays.copyOfRange(file, 1, 1 + ivLength);
+                encrypted = Arrays.copyOfRange(file, 1 + ivLength, file.length);
+                KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+                keyStore.load(null);
+                SecretKey key = (SecretKey) keyStore.getKey(BIOMETRIC_KEY, null);
+                cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, iv));
+            } catch (KeyPermanentlyInvalidatedException e) {
+                biometricDisable();
+                biometricFailed("Your fingerprints changed. Unlock with your password and turn fingerprint unlock on again.");
+                return;
+            } catch (Exception e) {
+                biometricFailed("Fingerprint unlock is not available: " + e.getMessage());
+                return;
+            }
+            authenticate(cipher, "Unlock andOTP", new BiometricPrompt.AuthenticationCallback() {
+                @Override
+                public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
+                    try {
+                        byte[] password = result.getCryptoObject().getCipher().doFinal(encrypted);
+                        synchronized (MainActivity.this) {
+                            biometricPassword = password;
+                        }
+                    } catch (Exception e) {
+                        biometricFailed("Cannot read the stored password: " + e.getMessage());
+                    }
+                }
+
+                @Override
+                public void onAuthenticationError(int code, CharSequence message) {
+                    biometricFailed(isCancel(code) ? "-" : message.toString());
+                }
+            }, () -> biometricFailed("-"));
+        });
+    }
+
+    /** The password from a successful {@link #biometricUnlock}, or null. The caller wipes it. */
+    public synchronized byte[] takeBiometricPassword() {
+        byte[] result = biometricPassword;
+        biometricPassword = null;
+        return result;
+    }
+
+    /** Why {@link #biometricUnlock} failed ("-" = cancelled by the user), or null. */
+    public synchronized String takeBiometricError() {
+        String result = biometricError;
+        biometricError = null;
+        return result;
+    }
+
+    private synchronized void biometricFailed(String text) {
+        biometricError = text;
+    }
+
+    private static boolean isCancel(int code) {
+        return code == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED
+                || code == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
+                || code == BiometricPrompt.BIOMETRIC_ERROR_NEGATIVE_BUTTON;
+    }
+
+    private void authenticate(Cipher cipher, String title, BiometricPrompt.AuthenticationCallback callback,
+                              Runnable onUsePassword) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return;
+        }
+        BiometricPrompt prompt = new BiometricPrompt.Builder(this)
+                .setTitle(title)
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                .setNegativeButton("Use password", getMainExecutor(), (dialog, which) -> onUsePassword.run())
+                .build();
+        prompt.authenticate(new BiometricPrompt.CryptoObject(cipher), new CancellationSignal(), getMainExecutor(), callback);
+    }
+
     private synchronized void post(String text) {
         message = text;
     }
@@ -483,8 +685,13 @@ public class MainActivity extends NativeActivity {
     }
 
     private byte[] readAll(Uri uri) throws Exception {
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            return readStream(in);
+        }
+    }
+
+    private static byte[] readStream(InputStream in) throws Exception {
+        try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
             int n;
             while ((n = in.read(buffer)) > 0) {

@@ -32,7 +32,7 @@ phone and import here, or the other way around.
 
   | Android | Desktop |
   | --- | --- |
-  | KeyStore | Optionally remember the vault password in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux) |
+  | KeyStore | Optionally remember the vault password in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux). The Android app offers fingerprint unlock instead (Android Keystore, strong biometrics). |
   | Auto-fill | Type the current code into the window you were last using (*⌨ Type into last window*, `andotp type`) |
   | Tasker broadcasts | Automatic encrypted backup to a folder after every change, with old backups pruned; `andotp backup` for cron/Task Scheduler (needs no password) |
   | Panic trigger | *☢ Wipe all data* / `andotp panic` overwrite and delete the vault and remove the keychain entry |

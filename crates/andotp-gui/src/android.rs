@@ -179,3 +179,69 @@ pub fn take_camera_error() -> Option<String> {
     .ok()
     .flatten()
 }
+
+fn call_bool(method: &str) -> bool {
+    with_activity(|env, activity| env.call_method(activity, method, "()Z", &[])?.z()).unwrap_or(false)
+}
+
+/// Fingerprint unlock is possible (Android 11+ with a strong biometric enrolled).
+pub fn biometric_available() -> bool {
+    call_bool("biometricAvailable")
+}
+
+/// A password is stored for fingerprint unlock.
+pub fn biometric_enabled() -> bool {
+    call_bool("biometricEnabled")
+}
+
+/// Asks for a fingerprint, then stores `password` encrypted with a biometric-bound Keystore key.
+/// The outcome arrives through [`take_message`].
+pub fn biometric_enroll(password: &str) -> Result<(), String> {
+    with_activity(|env, activity| {
+        let bytes = env.byte_array_from_slice(password.as_bytes())?;
+        env.call_method(activity, "biometricEnroll", "([B)V", &[JValue::Object(&bytes)])?;
+        Ok(())
+    })
+}
+
+/// Asks for a fingerprint and decrypts the stored password; poll [`take_biometric_result`].
+pub fn biometric_unlock() -> Result<(), String> {
+    with_activity(|env, activity| {
+        env.call_method(activity, "biometricUnlock", "()V", &[])?;
+        Ok(())
+    })
+}
+
+pub fn biometric_disable() {
+    let _ = with_activity(|env, activity| {
+        env.call_method(activity, "biometricDisable", "()V", &[])?;
+        Ok(())
+    });
+}
+
+/// The outcome of [`biometric_unlock`]: the password, or why it failed (`None` inside the error
+/// means the user chose to type the password instead).
+pub fn take_biometric_result() -> Option<Result<zeroize::Zeroizing<String>, Option<String>>> {
+    with_activity(|env, activity| {
+        let data = env.call_method(activity, "takeBiometricPassword", "()[B", &[])?.l()?;
+        if !data.is_null() {
+            let data = JByteArray::from(data);
+            let bytes = zeroize::Zeroizing::new(env.convert_byte_array(&data)?);
+            // Wipe the Java copy too.
+            let zeros = vec![0i8; bytes.len()];
+            env.set_byte_array_region(&data, 0, &zeros)?;
+            return Ok(Some(match std::str::from_utf8(&bytes) {
+                Ok(text) => Ok(zeroize::Zeroizing::new(text.to_owned())),
+                Err(_) => Err(Some("The stored password is damaged".to_owned())),
+            }));
+        }
+        let error = env.call_method(activity, "takeBiometricError", "()Ljava/lang/String;", &[])?.l()?;
+        if error.is_null() {
+            return Ok(None);
+        }
+        let error: String = env.get_string(&JString::from(error))?.into();
+        Ok(Some(Err(if error == "-" { None } else { Some(error) })))
+    })
+    .ok()
+    .flatten()
+}

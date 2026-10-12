@@ -65,12 +65,14 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(button)
 }
 
-/// A secondary action (Cancel, Close): Mantine's `default` variant.
+/// An outlined button (Mantine's `default` variant).
+pub fn secondary(text: &str) -> egui::Button<'static> {
+    egui::Button::new(theme::semibold(text, 14.0)).corner_radius(RADIUS_SM)
+}
+
+/// A secondary action (Cancel, Close).
 pub fn secondary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let button = egui::Button::new(theme::semibold(text, 14.0))
-        .corner_radius(RADIUS_SM)
-        .min_size(egui::vec2(80.0, CONTROL_HEIGHT));
-    ui.add(button)
+    ui.add(secondary(text).min_size(egui::vec2(80.0, CONTROL_HEIGHT)))
 }
 
 /// A large tile button with an icon and a caption, for the main choices of a dialog.
