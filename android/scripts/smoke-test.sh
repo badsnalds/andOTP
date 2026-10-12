@@ -14,10 +14,9 @@ shot() { adb exec-out screencap -p > "$out/$1.png"; }
 has_vault() { adb shell run-as "$pkg" ls files 2>/dev/null | grep -q secrets.json.aes; }
 fail() {
     echo "::error::$1"
-    local pid
-    pid=$(adb shell pidof "$pkg" || true)
-    if [ -n "$pid" ]; then adb logcat -d --pid="$pid" | tail -n 100 || true; fi
-    adb logcat -d -s AndroidRuntime:E DEBUG:V '*:F' | tail -n 100 || true
+    adb logcat -d -b all > "$out/logcat.txt" 2>/dev/null || true
+    echo "--- app log, crashes and process deaths ---"
+    grep -E "andOTP|AndroidRuntime|FATAL|DEBUG +:|Fatal signal|$pkg" "$out/logcat.txt" | tail -n 150 || true
     exit 1
 }
 
@@ -63,6 +62,14 @@ done
 has_vault || fail "no vault was created"
 sleep 3
 shot 2-unlocked
+
+# Stay open for a while: leaks that grow with every frame (e.g. JNI references) kill the app
+# after a minute or two, not right away.
+for _ in $(seq 15); do
+    sleep 10
+    alive || fail "the app exited while idle on the main screen"
+done
+shot 2b-idle
 
 # Background and resume (the GL surface is recreated).
 adb shell input keyevent KEYCODE_HOME

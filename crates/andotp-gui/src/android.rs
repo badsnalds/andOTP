@@ -27,12 +27,18 @@ fn with_activity<R>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }.map_err(|e| e.to_string())?;
     let mut env = vm.attach_current_thread_permanently().map_err(|e| e.to_string())?;
     let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-    let result = f(&mut env, &activity);
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
-    }
-    result.map_err(|e| e.to_string())
+    // This thread never returns to Java, so local references (strings, arrays, call results) are
+    // only released when we pop a frame. Without it they pile up with every call (the insets
+    // are polled several times a second) until ART aborts the app on reference table overflow.
+    env.with_local_frame(16, |env| {
+        let result = f(env, &activity);
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        result
+    })
+    .map_err(|e: jni::errors::Error| e.to_string())
 }
 
 /// Copies `text` to the clipboard, flagged as sensitive so Android hides it in previews.
