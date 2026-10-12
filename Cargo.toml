@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/andotp-core", "crates/andotp-cli", "crates/andotp-gui"]
+default-members = ["crates/andotp-core", "crates/andotp-cli"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/badsnalds/andOTP"
+authors = ["andOTP contributors"]
+
+[workspace.dependencies]
+andotp-core = { path = "crates/andotp-core", version = "1.0.0" }
+anyhow = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Key derivation and hashing are painfully slow without optimisations.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.andotp-core]
+opt-level = 3

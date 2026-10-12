@@ -1,0 +1,28 @@
+[package]
+name = "andotp-gui"
+description = "Desktop two-factor authenticator compatible with andOTP"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.95"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "andotp-gui"
+path = "src/main.rs"
+
+[dependencies]
+andotp-core.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "links", "persistence", "wayland", "x11"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+qrcode = { version = "0.14", default-features = false }
+rfd = "0.17"
+rqrr = "0.11"
+serde = { version = "1", features = ["derive"] }
+zeroize = "1"
+
+[dev-dependencies]
+egui_kittest = { version = "0.36", features = ["eframe"] }
+tempfile = "3"

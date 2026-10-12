@@ -1,5 +1,19 @@
 # Changelog
 
+#### v1.0.0 (Rust rewrite)
+
+ * Rewrote andOTP in Rust as a Cargo workspace: `andotp-core` (library), `andotp-cli` (command line) and `andotp-gui` (desktop app built on egui)
+ * Moved the unmaintained Android app to `legacy/android`
+ * Same algorithms as before: TOTP, HOTP, Steam and mOTP
+ * Full backup compatibility with andOTP for Android: imports plain-text, password-protected and old password-protected backups; exports plain-text and password-protected backups
+ * New: the encrypted desktop vault uses the andOTP password-protected backup format, with atomic saves and a `.bck` copy of the previous version
+ * New: QR codes for any account (in the terminal and the desktop app), plus scanning QR codes from image files
+ * New: auto-lock after inactivity, hide-until-clicked tokens and digit grouping in the desktop app
+ * Improvement: 600 000+ PBKDF2 iterations for newly written encrypted files
+ * Improvement: more tolerant `otpauth://` parsing (parameter names in any case, issuer taken from the label prefix)
+ * Improvement: keys, passwords and decrypted data are zeroized after use; secrets are redacted from debug output
+ * Bugfix: corrupt encrypted files can no longer stall the import with a huge iteration count
+
 #### v0.9.0.1
 
  * Bugfix: Fix crash when using the tags drawer (Issue #856)
