@@ -4,7 +4,7 @@
 
 andOTP generates the one-time codes used for two-factor authentication (2FA). This is
 a rewrite of the [andOTP Android app](legacy/android/), which is no longer maintained,
-as a modern Rust workspace. It includes a desktop app and a command-line client.
+as a modern Rust workspace. It includes a desktop app, an Android app and a command-line client.
 
 Backups work in both directions with the Android app. You can export from andOTP on your
 phone and import here, or the other way around.
@@ -43,7 +43,8 @@ phone and import here, or the other way around.
 | --- | --- |
 | [`crates/andotp-core`](crates/andotp-core) | Library: OTP algorithms, the account model, `otpauth://` URIs, crypto, backups and the vault. No UI code. |
 | [`crates/andotp-cli`](crates/andotp-cli) | `andotp`, the command-line client |
-| [`crates/andotp-gui`](crates/andotp-gui) | `andotp-gui`, the desktop app ([egui](https://github.com/emilk/egui)) for Linux, macOS and Windows |
+| [`crates/andotp-gui`](crates/andotp-gui) | `andotp-gui`, the app ([egui](https://github.com/emilk/egui)) for Linux, macOS, Windows and Android |
+| [`crates/andotp-android`](crates/andotp-android) + [`android`](android) | The Android packaging: native library and a small `NativeActivity` wrapper |
 | [`legacy/android`](legacy/android) | The original Java Android app (unmaintained, kept for reference) |
 
 ## Building
@@ -64,6 +65,12 @@ not work in native Wayland apps.
 The desktop app draws with OpenGL by default. You can switch to wgpu (Vulkan/Metal/DirectX 12) in *Settings → Renderer*,
 or set `ANDOTP_RENDERER=wgpu`. If wgpu fails to start, the app switches back to OpenGL for the next start.
 To build without the webcam scanner, use `cargo build -p andotp-gui --no-default-features`.
+
+## Android
+
+Every CI run of the **Android** workflow attaches an installable APK (`andOTP-apk` artifact). It runs the
+same Rust UI as the desktop app; installation, signing and the differences from the desktop app are in
+[android/README.md](android/README.md).
 
 ## Using the CLI
 

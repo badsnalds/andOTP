@@ -37,7 +37,11 @@ impl Renderer {
     pub fn to_eframe(self) -> eframe::Renderer {
         match self {
             Self::Glow => eframe::Renderer::Glow,
+            #[cfg(not(target_os = "android"))]
             Self::Wgpu => eframe::Renderer::Wgpu,
+            // The Android build only includes OpenGL.
+            #[cfg(target_os = "android")]
+            Self::Wgpu => eframe::Renderer::Glow,
         }
     }
 

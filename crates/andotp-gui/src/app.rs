@@ -7,16 +7,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use andotp_core::backup::{self, BackupFormat};
+#[cfg(not(target_os = "android"))]
+use andotp_core::keychain;
 use andotp_core::list::{self, SortMode, TagMode};
 use andotp_core::otp;
-use andotp_core::{Entry, OtpType, Vault, keychain};
+use andotp_core::{Entry, OtpType, Vault};
 use eframe::egui::{self, RichText};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::form::{EntryForm, FormResult};
 use crate::renderer::Renderer;
-#[cfg(feature = "webcam")]
+#[cfg(all(feature = "webcam", not(target_os = "android")))]
 use crate::webcam;
 use crate::widgets;
 
@@ -28,6 +30,84 @@ const REVEAL_SECONDS: f64 = 15.0;
 const AUTOTYPE_DELAY: Duration = Duration::from_millis(800);
 /// Word to type to confirm wiping everything.
 const WIPE_CONFIRMATION: &str = "DELETE";
+/// Desktop-only features (keychain, typing into other windows, file dialogs, renderer choice).
+const DESKTOP: bool = cfg!(not(target_os = "android"));
+
+/// Android stand-ins for desktop APIs, so the shared code compiles unchanged. The UI hides the
+/// corresponding features (see [`DESKTOP`]); file access goes through the system picker instead.
+#[cfg(target_os = "android")]
+mod keychain {
+    use std::path::Path;
+    pub fn load(_: &Path) -> Result<Option<zeroize::Zeroizing<String>>, String> {
+        Ok(None)
+    }
+    pub fn store(_: &Path, _: &str) -> Result<(), String> {
+        Err("The system keychain is not available on Android".into())
+    }
+    pub fn delete(_: &Path) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "android")]
+mod rfd {
+    use std::path::PathBuf;
+    pub struct FileDialog;
+    impl FileDialog {
+        pub fn new() -> Self {
+            Self
+        }
+        pub fn set_title(self, _: &str) -> Self {
+            self
+        }
+        pub fn add_filter(self, _: &str, _: &[&str]) -> Self {
+            self
+        }
+        pub fn set_file_name(self, _: impl Into<String>) -> Self {
+            self
+        }
+        pub fn pick_file(self) -> Option<PathBuf> {
+            None
+        }
+        pub fn save_file(self) -> Option<PathBuf> {
+            None
+        }
+        pub fn pick_folder(self) -> Option<PathBuf> {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn type_text(_: &str, _: Duration) -> Result<(), String> {
+    Err("Typing into other apps is not available on Android".into())
+}
+
+#[cfg(not(target_os = "android"))]
+fn type_text(text: &str, delay: Duration) -> Result<(), String> {
+    andotp_core::autotype::type_text(text, delay).map_err(|e| e.to_string())
+}
+
+fn copy_to_clipboard(ctx: &egui::Context, text: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = ctx;
+        crate::android::copy(&text)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        ctx.copy_text(text);
+        Ok(())
+    }
+}
+
+/// What a file picked with the Android document picker is for.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[derive(Clone, Copy)]
+enum OpenPurpose {
+    ImportBackup,
+    ScanImage,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Theme {
@@ -120,7 +200,7 @@ enum Dialog {
         confirm: String,
         error: Option<String>,
     },
-    #[cfg(feature = "webcam")]
+    #[cfg(all(feature = "webcam", not(target_os = "android")))]
     Webcam(webcam::Scanner),
     Settings,
     About,
@@ -138,6 +218,9 @@ struct Session {
     dialog: Option<Dialog>,
     /// Set by a dialog to return to the lock screen (e.g. after wiping the vault).
     lock_after: bool,
+    /// Android: a document picker is open for this purpose.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pending_open: Option<OpenPurpose>,
 }
 
 enum Screen {
@@ -235,6 +318,7 @@ impl AndOtpApp {
                         revealed: HashMap::new(),
                         dialog: None,
                         lock_after: false,
+                        pending_open: None,
                     }));
                     return;
                 }
@@ -341,7 +425,8 @@ impl AndOtpApp {
 
                 ui.add_space(24.0);
                 ui.label(RichText::new(path.display().to_string()).small().weak());
-                if !busy
+                if DESKTOP
+                    && !busy
                     && ui.small_button("Use another vault file…").clicked()
                     && let Some(p) = rfd::FileDialog::new()
                         .set_title("Choose or create a vault file")
@@ -375,7 +460,22 @@ impl AndOtpApp {
                     if ui.button("➕ Add account…").clicked() {
                         session.dialog = Some(Dialog::Entry(EntryForm::default()));
                     }
-                    if ui.button("📷 Scan QR code from image…").clicked()
+                    #[cfg(target_os = "android")]
+                    if ui.button("📷 Scan QR code from image…").clicked() {
+                        match crate::android::open_document("image/*") {
+                            Ok(()) => session.pending_open = Some(OpenPurpose::ScanImage),
+                            Err(err) => messages.push((err, true)),
+                        }
+                    }
+                    #[cfg(target_os = "android")]
+                    if ui.button("📥 Import backup…").clicked() {
+                        match crate::android::open_document("*/*") {
+                            Ok(()) => session.pending_open = Some(OpenPurpose::ImportBackup),
+                            Err(err) => messages.push((err, true)),
+                        }
+                    }
+                    if DESKTOP
+                        && ui.button("📷 Scan QR code from image…").clicked()
                         && let Some(path) = rfd::FileDialog::new()
                             .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
                             .pick_file()
@@ -385,28 +485,18 @@ impl AndOtpApp {
                             Err(err) => messages.push((err, true)),
                         }
                     }
-                    #[cfg(feature = "webcam")]
+                    #[cfg(all(feature = "webcam", not(target_os = "android")))]
                     if ui.button("📷 Scan QR code with webcam…").clicked() {
                         session.dialog = Some(Dialog::Webcam(webcam::Scanner::start(ui.ctx())));
                     }
                     ui.separator();
-                    if ui.button("📥 Import backup…").clicked()
+                    if DESKTOP
+                        && ui.button("📥 Import backup…").clicked()
                         && let Some(path) =
                             rfd::FileDialog::new().add_filter("andOTP backups", &["json", "aes"]).pick_file()
                     {
                         match std::fs::read(&path) {
-                            Ok(data) => match backup::import(&data, None) {
-                                Ok((entries, _)) => {
-                                    messages.push(import_entries(&mut session.vault, settings, entries))
-                                }
-                                Err(_) => {
-                                    session.dialog = Some(Dialog::ImportPassword {
-                                        data,
-                                        password: Zeroizing::default(),
-                                        error: None,
-                                    })
-                                }
-                            },
+                            Ok(data) => messages.extend(open_backup(session, settings, data)),
                             Err(err) => messages.push((format!("Cannot read file: {err}"), true)),
                         }
                     }
@@ -524,6 +614,9 @@ impl AndOtpApp {
             });
         });
 
+        #[cfg(target_os = "android")]
+        poll_android(session, settings, &mut messages);
+
         // Apply actions.
         let mut dirty = false;
         for action in actions {
@@ -535,10 +628,14 @@ impl AndOtpApp {
                         messages.push(("Enter the PIN first".into(), true));
                         continue;
                     }
-                    ui.ctx().copy_text(token.code);
-                    session.vault.entries[i].mark_used();
-                    dirty = true;
-                    messages.push(("Copied to clipboard".into(), false));
+                    match copy_to_clipboard(ui.ctx(), token.code) {
+                        Ok(()) => {
+                            session.vault.entries[i].mark_used();
+                            dirty = true;
+                            messages.push(("Copied to clipboard".into(), false));
+                        }
+                        Err(err) => messages.push((err, true)),
+                    }
                 }
                 Action::NextCounter(i) => {
                     session.vault.entries[i].counter += 1;
@@ -557,8 +654,8 @@ impl AndOtpApp {
                     let inbox = inbox.clone();
                     let ctx = ui.ctx().clone();
                     std::thread::spawn(move || {
-                        if let Err(err) = andotp_core::autotype::type_text(&code, AUTOTYPE_DELAY) {
-                            inbox.lock().unwrap().push((err.to_string(), true));
+                        if let Err(err) = type_text(&code, AUTOTYPE_DELAY) {
+                            inbox.lock().unwrap().push((err, true));
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         }
                         ctx.request_repaint();
@@ -650,6 +747,45 @@ fn auto_backup(vault: &Vault, settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
+/// Imports a backup file: directly if it is plain text, otherwise after asking for its password.
+fn open_backup(session: &mut Session, settings: &Settings, data: Vec<u8>) -> Option<(String, bool)> {
+    match backup::import(&data, None) {
+        Ok((entries, _)) => Some(import_entries(&mut session.vault, settings, entries)),
+        Err(_) => {
+            session.dialog = Some(Dialog::ImportPassword { data, password: Zeroizing::default(), error: None });
+            None
+        }
+    }
+}
+
+/// Picks up results of the Android document picker.
+#[cfg(target_os = "android")]
+fn poll_android(session: &mut Session, settings: &Settings, messages: &mut Vec<(String, bool)>) {
+    if let Some(message) = crate::android::take_message() {
+        if let Some(cancelled) = message.strip_prefix('-') {
+            let _ = cancelled;
+            session.pending_open = None;
+        } else if let Some(error) = message.strip_prefix('!') {
+            session.pending_open = None;
+            messages.push((error.to_owned(), true));
+        } else {
+            messages.push((message, false));
+        }
+    }
+    let Some(purpose) = session.pending_open else { return };
+    let Some(data) = crate::android::take_opened() else { return };
+    session.pending_open = None;
+    match purpose {
+        OpenPurpose::ImportBackup => messages.extend(open_backup(session, settings, data)),
+        OpenPurpose::ScanImage => {
+            match widgets::scan_qr_bytes(&data).and_then(|uri| Entry::from_uri(&uri).map_err(|e| e.to_string())) {
+                Ok(entry) => session.dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
+                Err(err) => messages.push((err, true)),
+            }
+        }
+    }
+}
+
 fn import_entries(vault: &mut Vault, settings: &Settings, entries: Vec<Entry>) -> (String, bool) {
     let summary = vault.import(entries);
     match persist(vault, settings) {
@@ -703,7 +839,7 @@ fn entry_card(
                         if ui.button("✏ Edit").clicked() {
                             actions.push(Action::Edit(idx));
                         }
-                        if ui.button("⌨ Type into last window").clicked() {
+                        if DESKTOP && ui.button("⌨ Type into last window").clicked() {
                             actions.push(Action::Type(idx));
                         }
                         if ui.button("🔳 Show QR code").clicked() {
@@ -783,6 +919,7 @@ fn dialog_ui(
     let mut close = false;
     let mut message = None;
     let mut open_keychain_dialog = false;
+    #[cfg_attr(not(all(feature = "webcam", not(target_os = "android"))), allow(unused_mut))]
     let mut next_dialog = None;
 
     let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
@@ -905,24 +1042,42 @@ fn dialog_ui(
                             return;
                         }
                         let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-                        let Some(path) = rfd::FileDialog::new().set_file_name(format.file_name(Some(&timestamp))).save_file()
-                        else {
-                            return;
-                        };
+                        let name = format.file_name(Some(&timestamp));
                         let data = if encrypted {
                             backup::export_encrypted(&session.vault.entries, password)
                         } else {
                             backup::to_json(&session.vault.entries).map(String::into_bytes)
                         };
-                        let result = data
-                            .map_err(|e| e.to_string())
-                            .and_then(|d| andotp_core::vault::write_private(&path, &d).map_err(|e| e.to_string()));
-                        match result {
-                            Ok(()) => {
-                                message = Some((format!("Exported {} accounts", session.vault.entries.len()), false));
-                                close = true;
+                        let data = match data {
+                            Ok(data) => Zeroizing::new(data),
+                            Err(err) => {
+                                *error = Some(err.to_string());
+                                return;
                             }
-                            Err(err) => *error = Some(err),
+                        };
+                        // Android: the system "save as" screen writes the file; the outcome
+                        // arrives later as a message.
+                        #[cfg(target_os = "android")]
+                        {
+                            let mime = if encrypted { "application/octet-stream" } else { "application/json" };
+                            match crate::android::create_document(&name, mime, &data) {
+                                Ok(()) => close = true,
+                                Err(err) => *error = Some(err),
+                            }
+                        }
+                        #[cfg(not(target_os = "android"))]
+                        {
+                            let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() else {
+                                return;
+                            };
+                            match andotp_core::vault::write_private(&path, &data) {
+                                Ok(()) => {
+                                    message =
+                                        Some((format!("Exported {} accounts", session.vault.entries.len()), false));
+                                    close = true;
+                                }
+                                Err(err) => *error = Some(err.to_string()),
+                            }
                         }
                     }
                 });
@@ -996,6 +1151,8 @@ fn dialog_ui(
                     ui.checkbox(&mut settings.show_previous, "Show previous token");
                     ui.end_row();
 
+                    // Desktop only: on Android these need platform services we do not use.
+                    if DESKTOP {
                     ui.label("Keychain");
                     let mut keychain_on = settings.keychain;
                     if ui
@@ -1054,6 +1211,7 @@ fn dialog_ui(
                         }
                     });
                     ui.end_row();
+                    }
                 });
                 ui.label(RichText::new(format!("Vault: {}", session.vault.path().display())).small().weak());
                 if ui.button("Close").clicked() {
@@ -1127,7 +1285,7 @@ fn dialog_ui(
                     }
                 });
             }
-            #[cfg(feature = "webcam")]
+            #[cfg(all(feature = "webcam", not(target_os = "android")))]
             Dialog::Webcam(scanner) => {
                 ui.heading("Scan QR code");
                 match scanner.poll(ctx) {
@@ -1196,6 +1354,29 @@ fn apply_theme(ctx: &egui::Context, theme: Theme) {
 
 impl eframe::App for AndOtpApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Keep clear of the Android status and navigation bars.
+        #[cfg(target_os = "android")]
+        {
+            let ppp = ui.ctx().pixels_per_point();
+            let (top, bottom) = crate::android::insets_px();
+            let margin = egui::Margin {
+                top: (top / ppp).round().min(120.0) as i8,
+                bottom: (bottom / ppp).round().min(120.0) as i8,
+                ..Default::default()
+            };
+            egui::Frame::new().inner_margin(margin).show(ui, |ui| self.app_ui(ui));
+        }
+        #[cfg(not(target_os = "android"))]
+        self.app_ui(ui);
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, SETTINGS_KEY, &self.settings);
+    }
+}
+
+impl AndOtpApp {
+    fn app_ui(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         let active = ui.input(|i| !i.events.is_empty() || i.pointer.is_moving());
         if active || self.last_activity == 0.0 {
@@ -1224,9 +1405,5 @@ impl eframe::App for AndOtpApp {
 
         // Tokens change every second; also re-check toasts and auto-lock.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
-    }
-
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, SETTINGS_KEY, &self.settings);
     }
 }

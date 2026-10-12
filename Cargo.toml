@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/andotp-core", "crates/andotp-cli", "crates/andotp-gui"]
+members = ["crates/andotp-core", "crates/andotp-cli", "crates/andotp-gui", "crates/andotp-android"]
 default-members = ["crates/andotp-core", "crates/andotp-cli"]
 
 [workspace.package]

@@ -83,8 +83,16 @@ pub fn qr_texture(ctx: &egui::Context, text: &str) -> Option<egui::TextureHandle
 }
 
 /// Finds and decodes the first `otpauth://` QR code in an image file.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn scan_qr(path: &std::path::Path) -> Result<String, String> {
     let image = image::open(path).map_err(|e| format!("Cannot open image: {e}"))?.to_luma8();
+    decode_otpauth(&image).ok_or_else(|| "No account QR code found in the image".to_owned())
+}
+
+/// Like [`scan_qr`], for an image file's contents.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn scan_qr_bytes(data: &[u8]) -> Result<String, String> {
+    let image = image::load_from_memory(data).map_err(|e| format!("Cannot open image: {e}"))?.to_luma8();
     decode_otpauth(&image).ok_or_else(|| "No account QR code found in the image".to_owned())
 }
 
