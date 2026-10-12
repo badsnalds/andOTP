@@ -35,7 +35,7 @@ phone and import here, or the other way around.
   | Auto-fill | Type the current code into the window you were last using (*⌨ Type into last window*, `andotp type`) |
   | Tasker broadcasts | Automatic encrypted backup to a folder after every change, with old backups pruned; `andotp backup` for cron/Task Scheduler (needs no password) |
   | Panic trigger | *☢ Wipe all data* / `andotp panic` overwrite and delete the vault and remove the keychain entry |
-  | Camera scanner | Scan setup QR codes with the webcam |
+  | Camera scanner | Scan setup QR codes with the webcam (and the camera in the Android app) |
 * **CLI**: for scripts and terminals, including a live `watch` view and QR codes drawn in the terminal.
 
 ## Workspace layout

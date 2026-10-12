@@ -21,6 +21,8 @@
  * New: OpenGL or wgpu renderer, selectable in the settings or with `ANDOTP_RENDERER`
  * New: logos for about 350 known services (the original andOTP thumbnails, converted to SVG and bundled; `tools/vector2svg.py`)
  * New: account cards redesigned for phones (two lines, tap to copy, larger touch targets)
+ * New: redesigned Add account dialog (Camera / Image / Paste link at the top, advanced options folded away) and a single Export dialog with an encrypted or plain-text choice
+ * New: Android camera QR scanning (Camera2; the camera permission is asked for only when scanning)
  * Bugfix: the `Charles_Schwab` thumbnail name was missing from the service list
  * New: Android app built from the same Rust UI, with the system file picker for import/export, QR scanning from images and a sensitive clipboard; CI builds the APK and checks it on an emulator
 

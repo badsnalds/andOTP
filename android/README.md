@@ -42,8 +42,8 @@ gradle -p android assembleRelease          # → android/app/build/outputs/apk/r
 ## Differences from the desktop app
 
 * Files are imported and exported through the system file picker.
-* QR codes are scanned from images (e.g. a screenshot of the setup page); live camera scanning is
-  not available yet.
+* QR codes are scanned with the camera (the permission is asked for the first time you scan) or
+  from images, e.g. a screenshot of the setup page. No Google Play Services are needed.
 * Not available on Android: system keychain unlock, typing into other apps, automatic backup
   folders and the renderer choice.
 * Screenshots of the app are blocked (`FLAG_SECURE`) in release builds.

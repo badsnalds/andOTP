@@ -18,8 +18,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::form::{EntryForm, FormResult};
 use crate::renderer::Renderer;
-#[cfg(all(feature = "webcam", not(target_os = "android")))]
-use crate::webcam;
+#[cfg(camera)]
+use crate::scanner;
+use crate::style;
 use crate::widgets;
 
 const SETTINGS_KEY: &str = "settings";
@@ -204,8 +205,8 @@ enum Dialog {
         confirm: String,
         error: Option<String>,
     },
-    #[cfg(all(feature = "webcam", not(target_os = "android")))]
-    Webcam(webcam::Scanner),
+    #[cfg(camera)]
+    Scan(scanner::Scanner),
     Settings,
     About,
 }
@@ -486,12 +487,12 @@ impl AndOtpApp {
                     if ui.button("➕ Add account…").clicked() {
                         session.dialog = Some(Dialog::Entry(EntryForm::default()));
                     }
-                    #[cfg(target_os = "android")]
-                    if ui.button("📷 Scan QR code from image…").clicked() {
-                        match crate::android::open_document("image/*") {
-                            Ok(()) => session.pending_open = Some(OpenPurpose::ScanImage),
-                            Err(err) => messages.push((err, true)),
-                        }
+                    #[cfg(camera)]
+                    if ui.button("📷 Scan QR code with camera…").clicked() {
+                        session.dialog = Some(Dialog::Scan(scanner::Scanner::start(ui.ctx())));
+                    }
+                    if ui.button("🖼 Scan QR code from image…").clicked() {
+                        messages.extend(start_image_scan(session));
                     }
                     #[cfg(target_os = "android")]
                     if ui.button("📥 Import backup…").clicked() {
@@ -499,21 +500,6 @@ impl AndOtpApp {
                             Ok(()) => session.pending_open = Some(OpenPurpose::ImportBackup),
                             Err(err) => messages.push((err, true)),
                         }
-                    }
-                    if DESKTOP
-                        && ui.button("📷 Scan QR code from image…").clicked()
-                        && let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
-                            .pick_file()
-                    {
-                        match widgets::scan_qr(&path).and_then(|uri| Entry::from_uri(&uri).map_err(|e| e.to_string())) {
-                            Ok(entry) => session.dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
-                            Err(err) => messages.push((err, true)),
-                        }
-                    }
-                    #[cfg(all(feature = "webcam", not(target_os = "android")))]
-                    if ui.button("📷 Scan QR code with webcam…").clicked() {
-                        session.dialog = Some(Dialog::Webcam(webcam::Scanner::start(ui.ctx())));
                     }
                     ui.separator();
                     if DESKTOP
@@ -526,17 +512,9 @@ impl AndOtpApp {
                             Err(err) => messages.push((format!("Cannot read file: {err}"), true)),
                         }
                     }
-                    if ui.button("📤 Export encrypted backup…").clicked() {
+                    if ui.button("📤 Export backup…").clicked() {
                         session.dialog = Some(Dialog::Export {
                             format: BackupFormat::Encrypted,
-                            password: Zeroizing::default(),
-                            confirm: Zeroizing::default(),
-                            error: None,
-                        });
-                    }
-                    if ui.button("📤 Export plain-text backup…").clicked() {
-                        session.dialog = Some(Dialog::Export {
-                            format: BackupFormat::Plain,
                             password: Zeroizing::default(),
                             confirm: Zeroizing::default(),
                             error: None,
@@ -775,6 +753,30 @@ fn auto_backup(vault: &Vault, settings: &Settings) -> Result<(), String> {
     Ok(())
 }
 
+/// Lets the user pick an image and adds the account in its QR code (asynchronously on Android).
+fn start_image_scan(session: &mut Session) -> Option<(String, bool)> {
+    #[cfg(target_os = "android")]
+    {
+        match crate::android::open_document("image/*") {
+            Ok(()) => session.pending_open = Some(OpenPurpose::ScanImage),
+            Err(err) => return Some((err, true)),
+        }
+        None
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let path =
+            rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"]).pick_file()?;
+        match widgets::scan_qr(&path).and_then(|uri| Entry::from_uri(&uri).map_err(|e| e.to_string())) {
+            Ok(entry) => {
+                session.dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry)));
+                None
+            }
+            Err(err) => Some((err, true)),
+        }
+    }
+}
+
 /// Imports a backup file: directly if it is plain text, otherwise after asking for its password.
 fn open_backup(session: &mut Session, settings: &Settings, data: Vec<u8>) -> Option<(String, bool)> {
     match backup::import(&data, None) {
@@ -990,17 +992,25 @@ fn dialog_ui(
     let mut close = false;
     let mut message = None;
     let mut open_keychain_dialog = false;
-    #[cfg_attr(not(all(feature = "webcam", not(target_os = "android"))), allow(unused_mut))]
+    #[cfg_attr(not(camera), allow(unused_mut))]
     let mut next_dialog = None;
 
+    let mut scan_image = false;
+    let width = style::dialog_width(ctx);
+    let max_height = ctx.content_rect().height() * 0.85;
     let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
-        match dialog {
+        ui.set_width(width);
+        // The modal area starts out smaller than the screen; let long dialogs use most of it.
+        ui.set_max_height(max_height);
+        egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| match dialog {
             Dialog::Entry(form) => {
                 let original = form.index.map(|i| &session.vault.entries[i]);
                 match form.ui(ui, original) {
                     FormResult::None => {}
                     FormResult::Cancel => close = true,
+                    #[cfg(camera)]
+                    FormResult::ScanCamera => next_dialog = Some(Dialog::Scan(scanner::Scanner::start(ctx))),
+                    FormResult::ScanImage => scan_image = true,
                     FormResult::Save(entry) => {
                         let name = entry.display_name();
                         let duplicate = session
@@ -1087,26 +1097,62 @@ fn dialog_ui(
                 });
             }
             Dialog::Export { format, password, confirm, error } => {
+                let count = session.vault.entries.len();
+                style::header(
+                    ui,
+                    "Export backup",
+                    &if count == 1 {
+                        "Save your account to a file.".to_owned()
+                    } else {
+                        format!("Save all {count} accounts to a file.")
+                    },
+                );
+                if style::option_card(
+                    ui,
+                    *format != BackupFormat::Plain,
+                    "🔒",
+                    "Encrypted (recommended)",
+                    "Protected by a password. Restores in andOTP for Android and desktop.",
+                )
+                .clicked()
+                {
+                    *format = BackupFormat::Encrypted;
+                    *error = None;
+                }
+                if style::option_card(
+                    ui,
+                    *format == BackupFormat::Plain,
+                    "📄",
+                    "Plain text",
+                    "Readable JSON for moving to another app. Anyone with the file can use your accounts.",
+                )
+                .clicked()
+                {
+                    *format = BackupFormat::Plain;
+                    *error = None;
+                }
                 let encrypted = *format != BackupFormat::Plain;
-                ui.heading(if encrypted { "Export encrypted backup" } else { "Export plain-text backup" });
                 if encrypted {
-                    ui.label("The backup can be restored in andOTP for Android and andOTP desktop.");
-                    ui.add(egui::TextEdit::singleline(&mut **password).password(true).hint_text("Backup password"));
-                    ui.add(egui::TextEdit::singleline(&mut **confirm).password(true).hint_text("Repeat password"));
+                    style::label(ui, "Backup password");
+                    ui.add(
+                        style::text_field(&mut **password)
+                            .password(true)
+                            .hint_text(format!("At least {MIN_PASSWORD_LENGTH} characters")),
+                    );
+                    style::label(ui, "Repeat password");
+                    ui.add(style::text_field(&mut **confirm).password(true));
                 } else {
+                    ui.add_space(4.0);
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
-                        "⚠ A plain-text backup contains all secrets unencrypted. Store it somewhere safe and delete it when done.",
+                        "⚠ Every secret is stored unencrypted. Keep the file somewhere safe and delete it when done.",
                     );
                 }
                 if let Some(err) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                    style::error(ui, err);
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                    if ui.button("Choose file…").clicked() {
+                style::button_row(ui, |ui| {
+                    if style::primary_button(ui, "Save backup…").clicked() {
                         if encrypted && password.chars().count() < MIN_PASSWORD_LENGTH {
                             *error = Some(format!("Use at least {MIN_PASSWORD_LENGTH} characters"));
                             return;
@@ -1153,6 +1199,9 @@ fn dialog_ui(
                                 Err(err) => *error = Some(err.to_string()),
                             }
                         }
+                    }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
                     }
                 });
             }
@@ -1359,35 +1408,56 @@ fn dialog_ui(
                     }
                 });
             }
-            #[cfg(all(feature = "webcam", not(target_os = "android")))]
-            Dialog::Webcam(scanner) => {
-                ui.heading("Scan QR code");
-                match scanner.poll(ctx) {
-                    webcam::Status::Starting => {
+            #[cfg(camera)]
+            Dialog::Scan(scanner) => {
+                style::header(ui, "Scan QR code", "Point the camera at the code shown by the service.");
+                let status = scanner.poll(ctx);
+                let width = ui.available_width();
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(width, width.min(320.0)), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 12.0, egui::Color32::from_gray(20));
+                if let Some(texture) = scanner.texture() {
+                    let size = texture.size_vec2();
+                    let scale = (rect.width() / size.x).min(rect.height() / size.y);
+                    let image_rect = egui::Rect::from_center_size(rect.center(), size * scale);
+                    egui::Image::new(texture).corner_radius(12.0).paint_at(ui, image_rect);
+                    // A viewfinder square to aim with.
+                    let side = rect.height().min(rect.width()) * 0.7;
+                    let finder = egui::Rect::from_center_size(rect.center(), egui::vec2(side, side));
+                    ui.painter().rect_stroke(
+                        finder,
+                        10.0,
+                        egui::Stroke::new(3.0, egui::Color32::from_white_alpha(200)),
+                        egui::StrokeKind::Middle,
+                    );
+                }
+                ui.add_space(8.0);
+                match status {
+                    scanner::Status::Starting => {
+                        ui.painter().text(
+                            rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Starting camera…",
+                            egui::FontId::proportional(15.0),
+                            egui::Color32::from_gray(200),
+                        );
+                    }
+                    scanner::Status::Scanning => {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.label("Starting camera…");
+                            ui.label("Looking for a QR code…");
                         });
                     }
-                    webcam::Status::Scanning => {
-                        ui.label("Hold the setup QR code in front of the camera.");
-                    }
-                    webcam::Status::Found(uri) => match Entry::from_uri(&uri) {
+                    scanner::Status::Found(uri) => match Entry::from_uri(&uri) {
                         Ok(entry) => next_dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
                         Err(err) => message = Some((err.to_string(), true)),
                     },
-                    webcam::Status::Failed(err) => {
-                        ui.colored_label(ui.visuals().error_fg_color, err);
+                    scanner::Status::Failed(err) => style::error(ui, &err),
+                }
+                style::button_row(ui, |ui| {
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
                     }
-                }
-                if let Some(texture) = scanner.texture() {
-                    let size = texture.size_vec2();
-                    let scale = (400.0 / size.x).min(300.0 / size.y).min(1.0);
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
-                }
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
+                });
             }
             Dialog::About => {
                 ui.heading(format!("andOTP {}", env!("CARGO_PKG_VERSION")));
@@ -1400,7 +1470,7 @@ fn dialog_ui(
                     close = true;
                 }
             }
-        }
+        });
     });
 
     let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
@@ -1414,6 +1484,9 @@ fn dialog_ui(
     }
     if next_dialog.is_some() {
         session.dialog = next_dialog;
+    }
+    if scan_image && let Some(err) = start_image_scan(session) {
+        message = Some(err);
     }
     message
 }

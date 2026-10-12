@@ -129,3 +129,53 @@ pub fn insets_px() -> (f32, f32) {
     *cache = Some((Instant::now(), insets));
     insets
 }
+
+/// Opens the back camera (asking for permission first if needed); frames arrive through
+/// [`take_camera_frame`], problems through [`take_camera_error`].
+pub fn camera_start() -> Result<(), String> {
+    with_activity(|env, activity| {
+        env.call_method(activity, "startCamera", "()V", &[])?;
+        Ok(())
+    })
+}
+
+pub fn camera_stop() {
+    let _ = with_activity(|env, activity| {
+        env.call_method(activity, "stopCamera", "()V", &[])?;
+        Ok(())
+    });
+}
+
+/// The latest camera frame as a greyscale image plus the sensor rotation in degrees.
+pub fn take_camera_frame() -> Option<(image::GrayImage, i32)> {
+    let bytes = with_activity(|env, activity| {
+        let data = env.call_method(activity, "takeCameraFrame", "()[B", &[])?.l()?;
+        if data.is_null() {
+            return Ok(None);
+        }
+        let data = JByteArray::from(data);
+        Ok(Some(env.convert_byte_array(&data)?))
+    })
+    .ok()
+    .flatten()?;
+    // Header: width, height, rotation as big-endian i32, then width * height luma bytes.
+    let int = |i: usize| bytes.get(i..i + 4).map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+    let (width, height, rotation) = (int(0)?, int(4)?, int(8)?);
+    let (width, height) = (u32::try_from(width).ok()?, u32::try_from(height).ok()?);
+    let pixels = bytes.get(12..)?.to_vec();
+    image::GrayImage::from_raw(width, height, pixels).map(|image| (image, rotation))
+}
+
+/// Why the camera could not be used (permission denied, no camera, …), once.
+pub fn take_camera_error() -> Option<String> {
+    with_activity(|env, activity| {
+        let message = env.call_method(activity, "takeCameraError", "()Ljava/lang/String;", &[])?.l()?;
+        if message.is_null() {
+            return Ok(None);
+        }
+        let message = JString::from(message);
+        Ok(Some(env.get_string(&message)?.into()))
+    })
+    .ok()
+    .flatten()
+}

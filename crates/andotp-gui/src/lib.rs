@@ -2,9 +2,14 @@
 
 #[cfg(target_os = "android")]
 pub mod android;
+#[cfg(target_os = "android")]
+mod android_camera;
 mod app;
 mod form;
 pub mod renderer;
+#[cfg(camera)]
+mod scanner;
+mod style;
 mod thumbnails;
 #[cfg(all(feature = "webcam", not(target_os = "android")))]
 mod webcam;

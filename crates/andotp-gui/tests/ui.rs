@@ -48,6 +48,10 @@ fn shows(harness: &Harness<'_, AndOtpApp>, text: &str) -> bool {
     harness.query_by(|n| n.role() == Role::Label && n.value().as_deref() == Some(text)).is_some()
 }
 
+fn shows_part(harness: &Harness<'_, AndOtpApp>, part: &str) -> bool {
+    harness.query_by(|n| n.role() == Role::Label && n.value().is_some_and(|v| v.contains(part))).is_some()
+}
+
 #[track_caller]
 fn assert_shows(harness: &Harness<'_, AndOtpApp>, text: &str) {
     assert!(shows(harness, text), "`{text}` is not shown");
@@ -127,11 +131,17 @@ fn create_vault_and_add_entry_from_uri() {
 
     harness.get_by_label("➕").click();
     harness.run_steps(2);
+    // Scanning is the main path; a link is pasted after opening its field.
+    harness.get_by_label("🔗\nPaste link").click();
+    harness.run_steps(2);
     let uri = "otpauth://totp/GitLab:dev@example.com?secret=JBSWY3DPEHPK3PXP&issuer=GitLab&tags=ci";
     // The URI field is the first text input of the dialog (after the search field).
     type_into(&mut harness, 1, Role::TextInput, uri);
     harness.run_steps(1);
     harness.get_by_label("Apply").click();
+    harness.run_steps(2);
+    // On a phone-sized window the form scrolls; Save is at the bottom.
+    harness.get_by_label("Save").scroll_to_me();
     harness.run_steps(2);
     harness.get_by_label("Save").click();
     harness.run_steps(3);
@@ -141,6 +151,35 @@ fn create_vault_and_add_entry_from_uri() {
     assert_eq!(vault.entries.len(), 1);
     assert_eq!(vault.entries[0].issuer, "GitLab");
     assert_eq!(vault.entries[0].tags, ["ci"]);
+}
+
+#[test]
+fn export_dialog_switches_format_and_checks_the_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_with_entries(dir.path());
+    let mut harness = harness(&path);
+    unlock(&mut harness, PASSWORD);
+    wait_for(&mut harness, "the entry list", |h| shows(h, "octocat"));
+
+    harness.get_by_label("☰").click();
+    harness.run_steps(2);
+    harness.get_by_label("📤 Export backup…").click();
+    harness.run_steps(2);
+    assert_shows(&harness, "Export backup");
+    // Encrypted is the default: two password fields, and a short password is refused.
+    assert_eq!(harness.get_all_by_role(Role::PasswordInput).count(), 2);
+    harness.get_by_label("Save backup…").click();
+    harness.run_steps(2);
+    assert!(shows_part(&harness, "Use at least"));
+
+    harness.get_by(|n| n.role() == Role::RadioButton && n.label().as_deref() == Some("Plain text")).click();
+    harness.run_steps(2);
+    assert_eq!(harness.query_all_by_role(Role::PasswordInput).count(), 0);
+    assert!(shows_part(&harness, "Every secret is stored unencrypted"));
+
+    harness.get_by_label("Cancel").click();
+    harness.run_steps(2);
+    assert!(!shows(&harness, "Export backup"));
 }
 
 #[test]

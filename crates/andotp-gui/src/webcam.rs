@@ -1,10 +1,12 @@
-//! Scanning setup QR codes with a webcam – the desktop counterpart of the Android camera scanner.
+//! Desktop QR scanning with a webcam (see `scanner`).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use eframe::egui;
+
+use crate::scanner::Status;
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{CameraIndex, RequestedFormat, RequestedFormatType};
 
@@ -23,13 +25,6 @@ pub struct Scanner {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     texture: Option<egui::TextureHandle>,
-}
-
-pub enum Status {
-    Starting,
-    Scanning,
-    Found(String),
-    Failed(String),
 }
 
 impl Scanner {

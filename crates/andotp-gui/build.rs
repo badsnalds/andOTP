@@ -4,6 +4,13 @@ use std::fmt::Write;
 use std::path::Path;
 
 fn main() {
+    // `cfg(camera)`: a QR scanner is available (webcam on desktop, camera on Android).
+    println!("cargo::rustc-check-cfg=cfg(camera)");
+    let android = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "android");
+    if android || std::env::var_os("CARGO_FEATURE_WEBCAM").is_some() {
+        println!("cargo::rustc-cfg=camera");
+    }
+
     let dir = Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("thumbnails");
     println!("cargo::rerun-if-changed={}", dir.display());
 
