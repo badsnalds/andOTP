@@ -167,6 +167,9 @@ struct Lock {
     error: Option<String>,
     /// Key derivation runs on a worker thread so the window stays responsive.
     pending: Option<Receiver<Result<Vault, String>>>,
+    /// The password field was focused once; afterwards the user decides (on Android, tapping
+    /// elsewhere closes the keyboard and must not bring it back).
+    autofocused: bool,
 }
 
 enum Dialog {
@@ -180,6 +183,7 @@ enum Dialog {
         data: Vec<u8>,
         password: Zeroizing<String>,
         error: Option<String>,
+        autofocused: bool,
     },
     Export {
         format: BackupFormat,
@@ -363,8 +367,9 @@ impl AndOtpApp {
                 );
                 // Focus the field once. Requesting focus restarts the input method, so doing it
                 // every frame makes the Android keyboard blink.
-                if !busy && lock.password.is_empty() && lock.error.is_none() && nothing_focused(ui) {
+                if !busy && !lock.autofocused && nothing_focused(ui) {
                     pw.request_focus();
+                    lock.autofocused = true;
                 }
                 let mut submit = pw.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if !exists {
@@ -754,7 +759,8 @@ fn open_backup(session: &mut Session, settings: &Settings, data: Vec<u8>) -> Opt
     match backup::import(&data, None) {
         Ok((entries, _)) => Some(import_entries(&mut session.vault, settings, entries)),
         Err(_) => {
-            session.dialog = Some(Dialog::ImportPassword { data, password: Zeroizing::default(), error: None });
+            session.dialog =
+                Some(Dialog::ImportPassword { data, password: Zeroizing::default(), error: None, autofocused: false });
             None
         }
     }
@@ -990,12 +996,13 @@ fn dialog_ui(
                     close = true;
                 }
             }
-            Dialog::ImportPassword { data, password, error } => {
+            Dialog::ImportPassword { data, password, error, autofocused } => {
                 ui.heading("Encrypted backup");
                 ui.label("Enter the password of the backup:");
                 let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true));
-                if nothing_focused(ui) {
+                if !*autofocused && nothing_focused(ui) {
                     edit.request_focus();
+                    *autofocused = true;
                 }
                 if let Some(err) = error {
                     ui.colored_label(ui.visuals().error_fg_color, err.as_str());

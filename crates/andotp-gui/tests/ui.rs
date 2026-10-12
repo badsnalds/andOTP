@@ -183,3 +183,18 @@ fn lock_screen_does_not_restart_the_keyboard() {
         assert!(!ime.should_interrupt_composition, "the keyboard was restarted");
     }
 }
+
+/// Closing the keyboard (the field loses focus) must not make the app focus the field again.
+#[test]
+fn dismissed_keyboard_stays_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = harness(&dir.path().join("new.aes"));
+    harness.run_steps(3);
+    assert!(harness.output().platform_output.ime.is_some(), "the password field starts focused");
+
+    harness.key_press(eframe::egui::Key::Escape); // TextEdit gives up the focus
+    for _ in 0..5 {
+        harness.step();
+        assert!(harness.output().platform_output.ime.is_none(), "the keyboard came back");
+    }
+}
