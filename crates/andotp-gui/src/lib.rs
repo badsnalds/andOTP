@@ -2,6 +2,9 @@
 
 mod app;
 mod form;
+pub mod renderer;
+#[cfg(feature = "webcam")]
+mod webcam;
 mod widgets;
 
 pub use app::AndOtpApp;

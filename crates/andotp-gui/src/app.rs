@@ -3,22 +3,31 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use andotp_core::backup::{self, BackupFormat};
 use andotp_core::list::{self, SortMode, TagMode};
 use andotp_core::otp;
-use andotp_core::{Entry, OtpType, Vault};
+use andotp_core::{Entry, OtpType, Vault, keychain};
 use eframe::egui::{self, RichText};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::form::{EntryForm, FormResult};
+use crate::renderer::Renderer;
+#[cfg(feature = "webcam")]
+use crate::webcam;
 use crate::widgets;
 
 const SETTINGS_KEY: &str = "settings";
 const MIN_PASSWORD_LENGTH: usize = 6;
 const TOAST_SECONDS: f64 = 3.0;
 const REVEAL_SECONDS: f64 = 15.0;
+/// Time for the window to minimise and focus to return to the previous window before typing.
+const AUTOTYPE_DELAY: Duration = Duration::from_millis(800);
+/// Word to type to confirm wiping everything.
+const WIPE_CONFIRMATION: &str = "DELETE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Theme {
@@ -42,6 +51,13 @@ struct Settings {
     auto_lock_minutes: u32,
     show_previous: bool,
     vault_path: Option<PathBuf>,
+    /// The vault password is stored in the system keychain.
+    keychain: bool,
+    /// Copy the encrypted vault to `backup_dir` after every change.
+    auto_backup: bool,
+    backup_dir: Option<PathBuf>,
+    /// Number of automatic backups to keep (0 = all).
+    backup_keep: usize,
 }
 
 impl Default for Settings {
@@ -55,6 +71,10 @@ impl Default for Settings {
             auto_lock_minutes: 5,
             show_previous: false,
             vault_path: None,
+            keychain: false,
+            auto_backup: false,
+            backup_dir: None,
+            backup_keep: 10,
         }
     }
 }
@@ -72,10 +92,36 @@ struct Lock {
 enum Dialog {
     Entry(EntryForm),
     ConfirmDelete(usize),
-    Qr { title: String, texture: egui::TextureHandle },
-    ImportPassword { data: Vec<u8>, password: Zeroizing<String>, error: Option<String> },
-    Export { format: BackupFormat, password: Zeroizing<String>, confirm: Zeroizing<String>, error: Option<String> },
-    ChangePassword { password: Zeroizing<String>, confirm: Zeroizing<String>, error: Option<String> },
+    Qr {
+        title: String,
+        texture: egui::TextureHandle,
+    },
+    ImportPassword {
+        data: Vec<u8>,
+        password: Zeroizing<String>,
+        error: Option<String>,
+    },
+    Export {
+        format: BackupFormat,
+        password: Zeroizing<String>,
+        confirm: Zeroizing<String>,
+        error: Option<String>,
+    },
+    ChangePassword {
+        password: Zeroizing<String>,
+        confirm: Zeroizing<String>,
+        error: Option<String>,
+    },
+    KeychainEnable {
+        password: Zeroizing<String>,
+        error: Option<String>,
+    },
+    Wipe {
+        confirm: String,
+        error: Option<String>,
+    },
+    #[cfg(feature = "webcam")]
+    Webcam(webcam::Scanner),
     Settings,
     About,
 }
@@ -90,6 +136,8 @@ struct Session {
     /// Entry index → time until which the token is revealed.
     revealed: HashMap<usize, f64>,
     dialog: Option<Dialog>,
+    /// Set by a dialog to return to the lock screen (e.g. after wiping the vault).
+    lock_after: bool,
 }
 
 enum Screen {
@@ -110,6 +158,12 @@ pub struct AndOtpApp {
     screen: Screen,
     toast: Option<Toast>,
     last_activity: f64,
+    /// Whether the automatic keychain unlock at start-up was attempted already.
+    keychain_tried: bool,
+    /// Messages from worker threads (e.g. auto-type failures).
+    inbox: Arc<Mutex<Vec<(String, bool)>>>,
+    /// Renderer stored for the next start.
+    renderer: Renderer,
 }
 
 /// Something the user asked for while the UI was being drawn.
@@ -122,6 +176,7 @@ enum Action {
     MoveUp(usize),
     MoveDown(usize),
     Reveal(usize),
+    Type(usize),
 }
 
 impl AndOtpApp {
@@ -134,6 +189,9 @@ impl AndOtpApp {
             screen: Screen::Locked(Lock::default()),
             toast: None,
             last_activity: 0.0,
+            keychain_tried: false,
+            inbox: Arc::default(),
+            renderer: Renderer::load(),
         }
     }
 
@@ -176,6 +234,7 @@ impl AndOtpApp {
                         pins: HashMap::new(),
                         revealed: HashMap::new(),
                         dialog: None,
+                        lock_after: false,
                     }));
                     return;
                 }
@@ -186,6 +245,15 @@ impl AndOtpApp {
                 Err(_) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)),
             }
         }
+
+        // Unlock from the system keychain once at start-up (not after an auto-lock, which would
+        // defeat its purpose).
+        let use_keychain = exists && self.settings.keychain;
+        if use_keychain && !self.keychain_tried && lock.pending.is_none() {
+            self.keychain_tried = true;
+            lock.pending = Some(spawn_keychain_unlock(ui.ctx(), path.clone()));
+        }
+        self.keychain_tried = true;
 
         let busy = lock.pending.is_some();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -230,6 +298,13 @@ impl AndOtpApp {
                     let label = if exists { "Unlock" } else { "Create vault" };
                     submit |= ui.add_sized([width, 32.0], egui::Button::new(RichText::new(label).strong())).clicked();
                 }
+                if use_keychain
+                    && !busy
+                    && ui.add_sized([width, 28.0], egui::Button::new("🔑 Unlock with system keychain")).clicked()
+                {
+                    lock.error = None;
+                    lock.pending = Some(spawn_keychain_unlock(ui.ctx(), path.clone()));
+                }
                 if let Some(err) = &lock.error {
                     ui.add_space(8.0);
                     ui.colored_label(ui.visuals().error_fg_color, err);
@@ -262,6 +337,7 @@ impl AndOtpApp {
                         lock.pending = Some(rx);
                     }
                 }
+                let busy = lock.pending.is_some();
 
                 ui.add_space(24.0);
                 ui.label(RichText::new(path.display().to_string()).small().weak());
@@ -287,6 +363,8 @@ impl AndOtpApp {
         let mut lock_requested = false;
         let mut messages: Vec<(String, bool)> = Vec::new();
         let settings = &mut self.settings;
+        let renderer = &mut self.renderer;
+        let inbox = &self.inbox;
         let Screen::Unlocked(session) = &mut self.screen else { return };
 
         // Top bar: search, filters and menu.
@@ -307,6 +385,10 @@ impl AndOtpApp {
                             Err(err) => messages.push((err, true)),
                         }
                     }
+                    #[cfg(feature = "webcam")]
+                    if ui.button("📷 Scan QR code with webcam…").clicked() {
+                        session.dialog = Some(Dialog::Webcam(webcam::Scanner::start(ui.ctx())));
+                    }
                     ui.separator();
                     if ui.button("📥 Import backup…").clicked()
                         && let Some(path) =
@@ -314,7 +396,9 @@ impl AndOtpApp {
                     {
                         match std::fs::read(&path) {
                             Ok(data) => match backup::import(&data, None) {
-                                Ok((entries, _)) => messages.push(import_entries(&mut session.vault, entries)),
+                                Ok((entries, _)) => {
+                                    messages.push(import_entries(&mut session.vault, settings, entries))
+                                }
                                 Err(_) => {
                                     session.dialog = Some(Dialog::ImportPassword {
                                         data,
@@ -355,6 +439,10 @@ impl AndOtpApp {
                     }
                     if ui.button("ℹ About").clicked() {
                         session.dialog = Some(Dialog::About);
+                    }
+                    ui.separator();
+                    if ui.button(RichText::new("☢ Wipe all data…").color(ui.visuals().error_fg_color)).clicked() {
+                        session.dialog = Some(Dialog::Wipe { confirm: String::new(), error: None });
                     }
                 });
                 ui.add(
@@ -456,6 +544,32 @@ impl AndOtpApp {
                     session.vault.entries[i].counter += 1;
                     dirty = true;
                 }
+                Action::Type(i) => {
+                    let pin = session.pins.get(&i).map(|p| p.as_str());
+                    let token = session.vault.entries[i].token(pin);
+                    if token.code == andotp_core::entry::MOTP_NO_PIN_CODE {
+                        messages.push(("Enter the PIN first".into(), true));
+                        continue;
+                    }
+                    // Hand the focus back to the previous window, then type there.
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    let code = Zeroizing::new(token.code);
+                    let inbox = inbox.clone();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        if let Err(err) = andotp_core::autotype::type_text(&code, AUTOTYPE_DELAY) {
+                            inbox.lock().unwrap().push((err.to_string(), true));
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        }
+                        ctx.request_repaint();
+                    });
+                    let entry = &mut session.vault.entries[i];
+                    if entry.otp_type == OtpType::Hotp {
+                        entry.counter += 1;
+                    }
+                    entry.mark_used();
+                    dirty = true;
+                }
                 Action::Reveal(i) => {
                     session.revealed.insert(i, now_time + REVEAL_SECONDS);
                 }
@@ -483,13 +597,15 @@ impl AndOtpApp {
             }
         }
 
-        if let Some(msg) = dialog_ui(ui.ctx(), session, settings) {
+        if let Some(msg) = dialog_ui(ui.ctx(), session, settings, renderer) {
             messages.push(msg);
         }
 
-        if dirty && let Err(err) = session.vault.save() {
-            messages.push((format!("Saving failed: {err}"), true));
+        if dirty && let Err(err) = persist(&session.vault, settings) {
+            messages.push((err, true));
         }
+        lock_requested |= session.lock_after;
+        messages.append(&mut inbox.lock().unwrap());
 
         for (text, error) in messages {
             self.notify(ui.ctx(), text, error);
@@ -500,11 +616,45 @@ impl AndOtpApp {
     }
 }
 
-fn import_entries(vault: &mut Vault, entries: Vec<Entry>) -> (String, bool) {
+fn spawn_keychain_unlock(ctx: &egui::Context, path: PathBuf) -> Receiver<Result<Vault, String>> {
+    let (tx, rx) = channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let result = match keychain::load(&path) {
+            Ok(Some(password)) => Vault::open(&path, &password).map_err(|e| match e {
+                andotp_core::Error::Decryption => "The password in the keychain is out of date".to_owned(),
+                other => other.to_string(),
+            }),
+            Ok(None) => Err("No password stored in the system keychain".to_owned()),
+            Err(err) => Err(err.to_string()),
+        };
+        let _ = tx.send(result);
+        ctx.request_repaint();
+    });
+    rx
+}
+
+/// Saves the vault and, if enabled, writes an automatic backup.
+fn persist(vault: &Vault, settings: &Settings) -> Result<(), String> {
+    vault.save().map_err(|e| format!("Saving failed: {e}"))?;
+    auto_backup(vault, settings)
+}
+
+fn auto_backup(vault: &Vault, settings: &Settings) -> Result<(), String> {
+    let Some(dir) = settings.backup_dir.as_ref().filter(|_| settings.auto_backup) else { return Ok(()) };
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    vault.backup_to(dir, &timestamp).map_err(|e| format!("Automatic backup failed: {e}"))?;
+    if settings.backup_keep > 0 {
+        backup::prune(dir, settings.backup_keep).map_err(|e| format!("Cannot remove old backups: {e}"))?;
+    }
+    Ok(())
+}
+
+fn import_entries(vault: &mut Vault, settings: &Settings, entries: Vec<Entry>) -> (String, bool) {
     let summary = vault.import(entries);
-    match vault.save() {
+    match persist(vault, settings) {
         Ok(()) => (format!("Imported {} accounts ({} duplicates skipped)", summary.added, summary.skipped), false),
-        Err(err) => (format!("Saving failed: {err}"), true),
+        Err(err) => (err, true),
     }
 }
 
@@ -552,6 +702,9 @@ fn entry_card(
                     ui.menu_button("⏷", |ui| {
                         if ui.button("✏ Edit").clicked() {
                             actions.push(Action::Edit(idx));
+                        }
+                        if ui.button("⌨ Type into last window").clicked() {
+                            actions.push(Action::Type(idx));
                         }
                         if ui.button("🔳 Show QR code").clicked() {
                             actions.push(Action::ShowQr(idx));
@@ -620,10 +773,17 @@ fn entry_card(
 }
 
 /// Draws the open dialog (if any). Returns a message for the toast.
-fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings) -> Option<(String, bool)> {
+fn dialog_ui(
+    ctx: &egui::Context,
+    session: &mut Session,
+    settings: &mut Settings,
+    renderer: &mut Renderer,
+) -> Option<(String, bool)> {
     let dialog = session.dialog.as_mut()?;
     let mut close = false;
     let mut message = None;
+    let mut open_keychain_dialog = false;
+    let mut next_dialog = None;
 
     let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
         ui.set_max_width(420.0);
@@ -648,9 +808,9 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
                                 Some(i) => session.vault.entries[i] = entry,
                                 None => session.vault.entries.push(entry),
                             }
-                            message = Some(match session.vault.save() {
+                            message = Some(match persist(&session.vault, settings) {
                                 Ok(()) => (format!("Saved {name}"), false),
-                                Err(err) => (format!("Saving failed: {err}"), true),
+                                Err(err) => (err, true),
                             });
                             close = true;
                         }
@@ -673,9 +833,9 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
                         session.vault.entries.remove(i);
                         session.pins.clear();
                         session.revealed.clear();
-                        message = Some(match session.vault.save() {
+                        message = Some(match persist(&session.vault, settings) {
                             Ok(()) => ("Account deleted".into(), false),
-                            Err(err) => (format!("Saving failed: {err}"), true),
+                            Err(err) => (err, true),
                         });
                         close = true;
                     }
@@ -707,7 +867,7 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
                     if ui.button("Import").clicked() || enter {
                         match backup::import(data, Some(password)) {
                             Ok((entries, _)) => {
-                                message = Some(import_entries(&mut session.vault, entries));
+                                message = Some(import_entries(&mut session.vault, settings, entries));
                                 close = true;
                             }
                             Err(err) => *error = Some(format!("Cannot decrypt: {err}")),
@@ -786,7 +946,16 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
                         } else {
                             match session.vault.change_password(password) {
                                 Ok(()) => {
-                                    message = Some(("Password changed".into(), false));
+                                    let mut text = "Password changed".to_owned();
+                                    if settings.keychain
+                                        && let Err(err) = keychain::store(session.vault.path(), password)
+                                    {
+                                        text = format!("Password changed, but the keychain update failed: {err}");
+                                    }
+                                    if let Err(err) = auto_backup(&session.vault, settings) {
+                                        text = err;
+                                    }
+                                    message = Some((text, false));
                                     close = true;
                                 }
                                 Err(err) => *error = Some(err.to_string()),
@@ -797,6 +966,9 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
             }
             Dialog::Settings => {
                 ui.heading("Settings");
+                if settings.auto_backup && settings.backup_dir.is_none() {
+                    ui.colored_label(ui.visuals().warn_fg_color, "Choose a folder for automatic backups.");
+                }
                 egui::Grid::new("settings").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                     ui.label("Theme");
                     ui.horizontal(|ui| {
@@ -823,9 +995,165 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
                     ui.label("");
                     ui.checkbox(&mut settings.show_previous, "Show previous token");
                     ui.end_row();
+
+                    ui.label("Keychain");
+                    let mut keychain_on = settings.keychain;
+                    if ui
+                        .checkbox(&mut keychain_on, "Unlock with the system keychain")
+                        .on_hover_text("Stores the vault password in the OS credential store")
+                        .changed()
+                    {
+                        if keychain_on {
+                            open_keychain_dialog = true;
+                        } else {
+                            settings.keychain = false;
+                            if let Err(err) = keychain::delete(session.vault.path()) {
+                                message = Some((err.to_string(), true));
+                            }
+                        }
+                    }
+                    ui.end_row();
+
+                    ui.label("Backups");
+                    ui.checkbox(&mut settings.auto_backup, "Back up automatically after every change");
+                    ui.end_row();
+
+                    if settings.auto_backup {
+                        ui.label("");
+                        ui.horizontal(|ui| {
+                            let label = settings
+                                .backup_dir
+                                .as_ref()
+                                .map_or_else(|| "Choose folder…".to_owned(), |d| d.display().to_string());
+                            if ui.button(label).clicked()
+                                && let Some(dir) = rfd::FileDialog::new().set_title("Backup folder").pick_folder()
+                            {
+                                settings.backup_dir = Some(dir);
+                                message = Some(match auto_backup(&session.vault, settings) {
+                                    Ok(()) => ("Backup written".into(), false),
+                                    Err(err) => (err, true),
+                                });
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("");
+                        ui.add(egui::Slider::new(&mut settings.backup_keep, 0..=100).text("kept (0 = all)"));
+                        ui.end_row();
+                    }
+
+                    ui.label("Renderer");
+                    ui.horizontal(|ui| {
+                        for choice in [Renderer::Glow, Renderer::Wgpu] {
+                            if ui.selectable_value(renderer, choice, choice.label()).changed() {
+                                message = Some(match renderer.save() {
+                                    Ok(()) => ("Takes effect after a restart".into(), false),
+                                    Err(err) => (format!("Cannot save the renderer choice: {err}"), true),
+                                });
+                            }
+                        }
+                    });
+                    ui.end_row();
                 });
                 ui.label(RichText::new(format!("Vault: {}", session.vault.path().display())).small().weak());
                 if ui.button("Close").clicked() {
+                    close = true;
+                }
+            }
+            Dialog::KeychainEnable { password, error } => {
+                ui.heading("Unlock with the system keychain");
+                ui.label(
+                    "Your vault password will be stored in the operating system's credential store, \
+                     so andOTP can unlock without asking while you are logged in.",
+                );
+                let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true).hint_text("Vault password"));
+                if let Some(err) = error {
+                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                }
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    if ui.button("Enable").clicked() || enter {
+                        let path = session.vault.path().to_path_buf();
+                        match Vault::open(&path, password) {
+                            Err(andotp_core::Error::Decryption) => *error = Some("Wrong password".into()),
+                            Err(err) => *error = Some(err.to_string()),
+                            Ok(_) => match keychain::store(&path, password) {
+                                Ok(()) => {
+                                    settings.keychain = true;
+                                    message = Some(("Password stored in the system keychain".into(), false));
+                                    close = true;
+                                }
+                                Err(err) => *error = Some(err.to_string()),
+                            },
+                        }
+                    }
+                });
+            }
+            Dialog::Wipe { confirm, error } => {
+                ui.heading(RichText::new("☢ Wipe all data").color(ui.visuals().error_fg_color));
+                ui.label(format!(
+                    "This irrecoverably destroys the vault with all {} accounts and removes the password from \
+                     the system keychain. Backups are not touched. Make sure you can still sign in to your \
+                     accounts.",
+                    session.vault.entries.len()
+                ));
+                ui.label(format!("Type {WIPE_CONFIRMATION} to confirm:"));
+                ui.text_edit_singleline(confirm);
+                if let Some(err) = error {
+                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    let armed = confirm.trim() == WIPE_CONFIRMATION;
+                    let button = egui::Button::new(RichText::new("Wipe").color(ui.visuals().error_fg_color));
+                    if ui.add_enabled(armed, button).clicked() {
+                        let path = session.vault.path().to_path_buf();
+                        match andotp_core::vault::wipe(&path) {
+                            Ok(_) => {
+                                let _ = keychain::delete(&path);
+                                settings.keychain = false;
+                                session.vault.entries.clear();
+                                session.lock_after = true;
+                                message = Some(("All data wiped".into(), false));
+                                close = true;
+                            }
+                            Err(err) => *error = Some(format!("Wiping failed: {err}")),
+                        }
+                    }
+                });
+            }
+            #[cfg(feature = "webcam")]
+            Dialog::Webcam(scanner) => {
+                ui.heading("Scan QR code");
+                match scanner.poll(ctx) {
+                    webcam::Status::Starting => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Starting camera…");
+                        });
+                    }
+                    webcam::Status::Scanning => {
+                        ui.label("Hold the setup QR code in front of the camera.");
+                    }
+                    webcam::Status::Found(uri) => match Entry::from_uri(&uri) {
+                        Ok(entry) => next_dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
+                        Err(err) => message = Some((err.to_string(), true)),
+                    },
+                    webcam::Status::Failed(err) => {
+                        ui.colored_label(ui.visuals().error_fg_color, err);
+                    }
+                }
+                if let Some(texture) = scanner.texture() {
+                    let size = texture.size_vec2();
+                    let scale = (400.0 / size.x).min(300.0 / size.y).min(1.0);
+                    ui.add(egui::Image::new(texture).fit_to_exact_size(size * scale));
+                }
+                if ui.button("Cancel").clicked() {
                     close = true;
                 }
             }
@@ -848,6 +1176,12 @@ fn dialog_ui(ctx: &egui::Context, session: &mut Session, settings: &mut Settings
         || modal.should_close() && (escape || matches!(dialog, Dialog::Qr { .. } | Dialog::About | Dialog::Settings))
     {
         session.dialog = None;
+    }
+    if open_keychain_dialog {
+        session.dialog = Some(Dialog::KeychainEnable { password: Zeroizing::default(), error: None });
+    }
+    if next_dialog.is_some() {
+        session.dialog = next_dialog;
     }
     message
 }

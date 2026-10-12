@@ -82,13 +82,44 @@ pub fn qr_texture(ctx: &egui::Context, text: &str) -> Option<egui::TextureHandle
     Some(ctx.load_texture("qr", image, egui::TextureOptions::NEAREST))
 }
 
-/// Finds and decodes the first QR code in an image file.
+/// Finds and decodes the first `otpauth://` QR code in an image file.
 pub fn scan_qr(path: &std::path::Path) -> Result<String, String> {
     let image = image::open(path).map_err(|e| format!("Cannot open image: {e}"))?.to_luma8();
-    let mut prepared = rqrr::PreparedImage::prepare(image);
+    decode_otpauth(&image).ok_or_else(|| "No account QR code found in the image".to_owned())
+}
+
+/// Returns the content of the first `otpauth://` QR code in the image.
+pub fn decode_otpauth(image: &image::GrayImage) -> Option<String> {
+    let mut prepared = rqrr::PreparedImage::prepare(image.clone());
     prepared
         .detect_grids()
         .into_iter()
-        .find_map(|grid| grid.decode().ok().map(|(_, content)| content))
-        .ok_or_else(|| "No QR code found in the image".to_owned())
+        .filter_map(|grid| grid.decode().ok().map(|(_, content)| content))
+        .find(|content| content.to_ascii_lowercase().starts_with("otpauth://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Renders `text` as a QR code at `scale` pixels per module.
+    fn qr_image(text: &str, scale: u32) -> image::GrayImage {
+        let code = qrcode::QrCode::new(text.as_bytes()).unwrap();
+        let width = code.width() as u32;
+        let colors = code.to_colors();
+        let size = (width + 8) * scale;
+        image::GrayImage::from_fn(size, size, |x, y| {
+            let (mx, my) = ((x / scale).wrapping_sub(4), (y / scale).wrapping_sub(4));
+            let dark = mx < width && my < width && colors[(my * width + mx) as usize] == qrcode::Color::Dark;
+            image::Luma([if dark { 0 } else { 255 }])
+        })
+    }
+
+    #[test]
+    fn decodes_account_qr_codes_only() {
+        let uri = "otpauth://totp/GitHub:me?secret=JBSWY3DPEHPK3PXP&issuer=GitHub";
+        assert_eq!(decode_otpauth(&qr_image(uri, 4)).as_deref(), Some(uri));
+        assert_eq!(decode_otpauth(&qr_image("https://example.com", 4)), None);
+        assert_eq!(decode_otpauth(&image::GrayImage::new(64, 64)), None);
+    }
 }

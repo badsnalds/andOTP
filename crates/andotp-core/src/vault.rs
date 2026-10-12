@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
-use crate::backup::{self, KeyParams};
+use crate::backup::{self, BackupFormat, KeyParams};
 use crate::crypto::{self, KEY_LENGTH};
 use crate::{Entry, Error, Result};
 
@@ -109,6 +109,12 @@ impl Vault {
         self.save()
     }
 
+    /// Writes a copy of the encrypted vault into `dir` as an andOTP password-protected backup
+    /// (`otp_accounts_<timestamp>.json.aes`, readable with the vault password) and returns its path.
+    pub fn backup_to(&self, dir: &Path, timestamp: &str) -> Result<PathBuf> {
+        backup_file(&self.path, dir, timestamp)
+    }
+
     /// Adds an entry unless the same account already exists. Returns whether it was added.
     pub fn add(&mut self, entry: Entry) -> bool {
         if self.entries.iter().any(|e| e.same_account(&entry)) {
@@ -138,6 +144,37 @@ impl Vault {
             self.entries.insert(to, entry);
         }
     }
+}
+
+/// Like [`Vault::backup_to`], but works on the vault file without unlocking it.
+pub fn backup_file(vault: &Path, dir: &Path, timestamp: &str) -> Result<PathBuf> {
+    let data = fs::read(vault)?;
+    KeyParams::parse(&data)?; // refuse to copy something that is not a vault
+    fs::create_dir_all(dir)?;
+    let target = dir.join(BackupFormat::Encrypted.file_name(Some(timestamp)));
+    write_private(&target, &data)?;
+    Ok(target)
+}
+
+/// Destroys the vault at `path` together with its `.bck` and `.tmp` companions.
+///
+/// Each file is overwritten with random data before it is removed, so the contents cannot be
+/// recovered by undeleting (no guarantee on copy-on-write or wear-levelled storage). Returns the
+/// number of files removed.
+pub fn wipe(path: &Path) -> std::io::Result<usize> {
+    let mut removed = 0;
+    for file in [path.to_path_buf(), sibling(path, "bck"), sibling(path, "tmp")] {
+        let Ok(meta) = fs::metadata(&file) else { continue };
+        if meta.is_file() {
+            let mut handle = fs::OpenOptions::new().write(true).open(&file)?;
+            handle.write_all(&crypto::random_bytes(meta.len() as usize))?;
+            handle.sync_all()?;
+            drop(handle);
+            fs::remove_file(&file)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 fn sibling(path: &Path, ext: &str) -> PathBuf {
@@ -203,6 +240,26 @@ mod tests {
         vault.save().unwrap();
         assert!(Vault::open(&path, "old").is_err());
         assert!(Vault::open(&path, "new").is_ok());
+    }
+
+    #[test]
+    fn backup_copy_and_wipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut vault = Vault::create_with_iterations(&path, "pw", 1000).unwrap();
+        vault.add(Entry::new(OtpType::Totp, "MZXW6", "A", "a").unwrap());
+        vault.save().unwrap();
+
+        let backups = dir.path().join("backups");
+        let copy = vault.backup_to(&backups, "2024-01-01_00-00-00").unwrap();
+        assert_eq!(copy, backups.join("otp_accounts_2024-01-01_00-00-00.json.aes"));
+        let (entries, _) = backup::import(&fs::read(&copy).unwrap(), Some("pw")).unwrap();
+        assert_eq!(entries, vault.entries);
+
+        assert_eq!(wipe(&path).unwrap(), 2); // vault + .bck
+        assert!(!path.exists() && !sibling(&path, "bck").exists());
+        assert_eq!(wipe(&path).unwrap(), 0);
+        assert!(copy.exists(), "backups are not touched");
     }
 
     #[test]

@@ -13,15 +13,22 @@ name = "andotp-gui"
 path = "src/main.rs"
 
 [dependencies]
-andotp-core.workspace = true
+andotp-core = { workspace = true, features = ["autotype", "keychain"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "links", "persistence", "wayland", "x11"] }
+eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "links", "persistence", "wayland", "wgpu", "x11"] }
+directories = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 qrcode = { version = "0.14", default-features = false }
 rfd = "0.17"
 rqrr = "0.11"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"
+
+[features]
+default = ["webcam"]
+# Scan QR codes with a webcam.
+webcam = ["dep:nokhwa"]
 
 [dev-dependencies]
 egui_kittest = { version = "0.36", features = ["eframe"] }

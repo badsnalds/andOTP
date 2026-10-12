@@ -20,12 +20,21 @@ phone and import here, or the other way around.
   The vault file is a regular andOTP password-protected backup, so andOTP for Android can import it directly.
 * **Backups**: imports plain-text, password-protected and *old* password-protected andOTP
   backups, and exports plain-text or password-protected ones.
-* **`otpauth://` URIs**: add accounts from links or QR-code images, and show any account
+* **`otpauth://` URIs**: add accounts from links, QR-code images or the webcam, and show any account
   as a QR code to move it to a phone.
 * **Organisation**: tags (match any or all), search, sorting (manual, issuer, label, last used, most used)
   and andOTP's issuer thumbnail names.
 * **Desktop app**: light/dark/system theme, a countdown ring, click to copy, optional hide-until-clicked,
   digit grouping and auto-lock after inactivity.
+* **Desktop versions of the Android-only features**:
+
+  | Android | Desktop |
+  | --- | --- |
+  | KeyStore | Optionally remember the vault password in the system keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux) |
+  | Auto-fill | Type the current code into the window you were last using (*⌨ Type into last window*, `andotp type`) |
+  | Tasker broadcasts | Automatic encrypted backup to a folder after every change, with old backups pruned; `andotp backup` for cron/Task Scheduler (needs no password) |
+  | Panic trigger | *☢ Wipe all data* / `andotp panic` overwrite and delete the vault and remove the keychain entry |
+  | Camera scanner | Scan setup QR codes with the webcam |
 * **CLI**: for scripts and terminals, including a live `watch` view and QR codes drawn in the terminal.
 
 ## Workspace layout
@@ -48,7 +57,13 @@ cargo test --workspace                  # all tests, including headless GUI test
 ```
 
 The binaries end up in `target/release/`. On Linux, the desktop app needs OpenGL and the usual
-X11/Wayland libraries at runtime, such as `libxkbcommon-x11` and `libGL`.
+X11/Wayland libraries at runtime, such as `libxkbcommon-x11` and `libGL`. The keychain needs a
+Secret Service provider (GNOME Keyring, KWallet, KeePassXC). Typing into other windows uses X11, so it may
+not work in native Wayland apps.
+
+The desktop app draws with OpenGL by default. You can switch to wgpu (Vulkan/Metal/DirectX 12) in *Settings → Renderer*,
+or set `ANDOTP_RENDERER=wgpu`. If wgpu fails to start, the app switches back to OpenGL for the next start.
+To build without the webcam scanner, use `cargo build -p andotp-gui --no-default-features`.
 
 ## Using the CLI
 
@@ -65,6 +80,10 @@ andotp qr github                               # QR code in the terminal
 andotp import otp_accounts.json.aes            # andOTP backup from your phone
 andotp export ~/backups --timestamp            # password-protected andOTP backup
 andotp passwd                                  # change the vault password
+andotp type github --delay 3                   # type the code into the focused window
+andotp keychain enable                         # stop asking for the password (system keychain)
+andotp backup --dir ~/backups --keep 30        # copy the encrypted vault (e.g. from cron)
+andotp panic                                   # destroy the vault (asks for confirmation)
 ```
 
 Pick an entry by its number from `list`, or by any text that matches only one entry.
@@ -72,6 +91,7 @@ Pick an entry by its number from `list`, or by any text that matches only one en
 | Environment variable | Purpose |
 | --- | --- |
 | `ANDOTP_VAULT` | Vault path. The default is the platform data directory, e.g. `~/.local/share/andotp/secrets.json.aes`. The desktop app reads it too. |
+| `ANDOTP_RENDERER` | Desktop app only: `glow` (OpenGL) or `wgpu` |
 | `ANDOTP_PASSWORD` | Vault password, for automation. Prefer the interactive prompt. |
 | `ANDOTP_BACKUP_PASSWORD` | Password for `import`/`export` |
 | `ANDOTP_PIN` | mOTP PIN for `code` |
@@ -103,8 +123,8 @@ leaves the previous version next to it as `*.bck`. On Unix, files are created wi
 * The core logic has unit tests, including RFC 4226/6238, GCM and PBKDF2 test vectors. The CLI has end-to-end tests,
   and the desktop app has headless UI tests.
 
-Android-only features are not part of this rewrite: KeyStore, auto-fill, panic trigger, Tasker
-broadcasts and the camera QR scanner. The original app is still in [`legacy/android`](legacy/android).
+The Android-only features have desktop versions (see the table above). The original app is still in
+[`legacy/android`](legacy/android).
 
 ## Credits
 

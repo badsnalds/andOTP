@@ -13,7 +13,7 @@ name = "andotp"
 path = "src/main.rs"
 
 [dependencies]
-andotp-core.workspace = true
+andotp-core = { workspace = true, features = ["autotype", "keychain"] }
 anyhow.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }

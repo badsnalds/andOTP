@@ -46,6 +46,28 @@ impl BackupFormat {
     }
 }
 
+/// Deletes the oldest timestamped password-protected backups (`otp_accounts_*.json.aes`) in
+/// `dir` so that at most `keep` remain. Returns the number of deleted files.
+pub fn prune(dir: &std::path::Path, keep: usize) -> std::io::Result<usize> {
+    let mut backups: Vec<_> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("otp_accounts_") && n.ends_with(".json.aes"))
+        })
+        .collect();
+    // The timestamp format sorts chronologically.
+    backups.sort();
+    let excess = backups.len().saturating_sub(keep);
+    for old in &backups[..excess] {
+        std::fs::remove_file(old)?;
+    }
+    Ok(excess)
+}
+
 /// Serialises entries to the plain-text backup format.
 pub fn to_json(entries: &[Entry]) -> Result<String> {
     Ok(serde_json::to_string(entries)?)
@@ -182,6 +204,20 @@ mod tests {
         let (entries, format) = import(&data, Some("old password")).unwrap();
         assert_eq!(format, BackupFormat::EncryptedLegacy);
         assert_eq!(entries, sample());
+    }
+
+    #[test]
+    fn pruning_keeps_newest() {
+        let dir = tempfile::tempdir().unwrap();
+        for ts in ["2024-01-01_00-00-00", "2024-03-01_00-00-00", "2024-02-01_00-00-00"] {
+            std::fs::write(dir.path().join(BackupFormat::Encrypted.file_name(Some(ts))), b"x").unwrap();
+        }
+        std::fs::write(dir.path().join("unrelated.json.aes"), b"x").unwrap();
+        assert_eq!(prune(dir.path(), 2).unwrap(), 1);
+        assert!(!dir.path().join("otp_accounts_2024-01-01_00-00-00.json.aes").exists());
+        assert!(dir.path().join("otp_accounts_2024-03-01_00-00-00.json.aes").exists());
+        assert!(dir.path().join("unrelated.json.aes").exists());
+        assert_eq!(prune(dir.path(), 5).unwrap(), 0);
     }
 
     #[test]

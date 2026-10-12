@@ -142,3 +142,30 @@ fn create_vault_and_add_entry_from_uri() {
     assert_eq!(vault.entries[0].issuer, "GitLab");
     assert_eq!(vault.entries[0].tags, ["ci"]);
 }
+
+#[test]
+fn wipe_requires_confirmation_and_destroys_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_with_entries(dir.path());
+    let mut harness = harness(&path);
+    unlock(&mut harness, PASSWORD);
+    wait_for(&mut harness, "the entry list", |h| shows(h, "octocat"));
+
+    harness.get_by_label("☰").click();
+    harness.run_steps(2);
+    harness.get_by_label("☢ Wipe all data…").click();
+    harness.run_steps(2);
+    harness.get_by_label("Wipe").click();
+    harness.run_steps(2);
+    assert!(path.exists(), "wiping must need the confirmation word");
+
+    // The confirmation field is the last text input (after the search field).
+    let n = harness.get_all_by_role(Role::TextInput).count();
+    type_into(&mut harness, n - 1, Role::TextInput, "DELETE");
+    harness.run_steps(1);
+    harness.get_by_label("Wipe").click();
+    harness.run_steps(3);
+
+    assert!(!path.exists());
+    assert_shows(&harness, "Create a password to protect your accounts");
+}

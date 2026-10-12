@@ -15,6 +15,10 @@ pub enum Error {
     Encryption,
     #[error("data is too short or malformed")]
     Malformed,
+    #[error("system keychain error: {0}")]
+    Keychain(String),
+    #[error("cannot type into other windows: {0}")]
+    AutoType(String),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("I/O error: {0}")]

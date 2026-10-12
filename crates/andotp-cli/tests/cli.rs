@@ -66,3 +66,32 @@ fn full_workflow() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot unlock vault"));
 }
+
+#[test]
+fn backup_rotation_and_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("vault.aes");
+    ok(&vault, &["init"]);
+    ok(&vault, &["add", "--secret", "JBSWY3DPEHPK3PXP", "--label", "me"]);
+
+    // Backups need no password and are readable with the vault password.
+    let backups = dir.path().join("backups");
+    let out = Command::new(env!("CARGO_BIN_EXE_andotp"))
+        .args(["backup", "--keep", "1"])
+        .env("ANDOTP_VAULT", &vault)
+        .env_remove("ANDOTP_PASSWORD")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let files: Vec<_> = std::fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(files.len(), 1);
+    let other = dir.path().join("other.aes");
+    ok(&other, &["init"]);
+    ok(&other, &["import", files[0].to_str().unwrap(), "--backup-password", PASSWORD]);
+    assert!(ok(&other, &["list"]).contains("me"));
+
+    ok(&vault, &["panic", "--yes"]);
+    assert!(!vault.exists());
+    assert!(files[0].exists(), "panic must not touch backups");
+    assert!(!andotp(&vault, &["list"]).status.success());
+}

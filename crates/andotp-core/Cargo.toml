@@ -11,7 +11,9 @@ authors.workspace = true
 [dependencies]
 aes-gcm = "0.10"
 directories = "6"
+enigo = { version = "0.6", optional = true }
 hmac = "0.12"
+keyring = { version = "3", optional = true }
 md-5 = "0.10"
 percent-encoding = "2"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
@@ -23,6 +25,21 @@ sha2 = "0.10"
 thiserror = "2"
 url = "2"
 zeroize = { version = "1", features = ["derive"] }
+
+[features]
+# Store vault passwords in the operating system's credential store.
+keychain = ["dep:keyring"]
+# Type tokens into the focused window by simulating keystrokes.
+autotype = ["dep:enigo"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", optional = true, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", optional = true, features = ["windows-native"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+keyring = { version = "3", optional = true, features = ["async-secret-service", "crypto-rust", "async-io"] }
 
 [dev-dependencies]
 tempfile = "3"

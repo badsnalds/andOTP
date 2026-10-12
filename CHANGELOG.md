@@ -13,6 +13,12 @@
  * Improvement: more tolerant `otpauth://` parsing (parameter names in any case, issuer taken from the label prefix)
  * Improvement: keys, passwords and decrypted data are zeroized after use; secrets are redacted from debug output
  * Bugfix: corrupt encrypted files can no longer stall the import with a huge iteration count
+ * New: unlock with the system keychain (replaces Android KeyStore)
+ * New: type codes into the last used window (replaces auto-fill)
+ * New: automatic encrypted backups after every change, with pruning, plus `andotp backup` for scheduled backups (replaces Tasker broadcasts)
+ * New: panic wipe in the desktop app and `andotp panic`
+ * New: webcam QR code scanning (optional `webcam` feature, on by default)
+ * New: OpenGL or wgpu renderer, selectable in the settings or with `ANDOTP_RENDERER`
 
 #### v0.9.0.1
 

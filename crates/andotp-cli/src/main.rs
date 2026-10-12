@@ -7,7 +7,7 @@ use std::time::Duration;
 use andotp_core::backup::{self, BackupFormat};
 use andotp_core::list::{self, SortMode, TagMode};
 use andotp_core::otp::{self, HashAlgorithm};
-use andotp_core::{Entry, OtpType, Vault};
+use andotp_core::{Entry, OtpType, Vault, keychain};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use zeroize::Zeroizing;
@@ -83,6 +83,47 @@ enum Command {
     Passwd,
     /// Print the location of the vault.
     Path,
+    /// Type a token into the focused window (instead of copy & paste).
+    Type {
+        entry: String,
+        /// Seconds to wait before typing, to switch to the target window.
+        #[arg(long, default_value_t = 2.0)]
+        delay: f64,
+        #[arg(long, env = "ANDOTP_PIN")]
+        pin: Option<String>,
+    },
+    /// Copy the encrypted vault into a backup folder (works without the password, e.g. from cron).
+    ///
+    /// The copy is an andOTP password-protected backup that opens with the vault password.
+    Backup {
+        /// Target folder (default: `backups` next to the vault).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Delete the oldest backups so that at most this many remain.
+        #[arg(long)]
+        keep: Option<usize>,
+    },
+    /// Remember the vault password in the system keychain, or forget it.
+    Keychain {
+        #[arg(value_enum)]
+        action: KeychainAction,
+    },
+    /// Irrecoverably destroy the vault (and its keychain entry). Backups are not touched.
+    Panic {
+        /// Do not ask for confirmation.
+        #[arg(short, long)]
+        yes: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum KeychainAction {
+    /// Store the vault password so `andotp` stops asking for it.
+    Enable,
+    /// Remove the stored password.
+    Disable,
+    /// Show whether a password is stored.
+    Status,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -316,7 +357,82 @@ fn run(cli: Cli) -> Result<()> {
             let mut vault = open(&path)?;
             let password = new_password()?;
             vault.change_password(&password)?;
+            if matches!(keychain::load(&path), Ok(Some(_))) {
+                keychain::store(&path, &password).context("cannot update the keychain entry")?;
+            }
             println!("Password changed.");
+            Ok(())
+        }
+        Command::Type { entry, delay, pin } => {
+            let mut vault = open(&path)?;
+            let idx = select(&vault, &entry)?;
+            let e = &mut vault.entries[idx];
+            let pin = match (e.otp_type, pin) {
+                (OtpType::Motp, None) => Some(prompt_secret("mOTP PIN: ")?),
+                (_, pin) => pin.map(Zeroizing::new),
+            };
+            let code = Zeroizing::new(e.token(pin.as_deref().map(|p| p.as_str())).code);
+            eprintln!("Typing the code for `{}` in {delay} s – focus the target window…", e.display_name());
+            andotp_core::autotype::type_text(
+                &code,
+                Duration::from_secs_f64(if delay.is_finite() { delay.clamp(0.0, 60.0) } else { 2.0 }),
+            )?;
+            if e.otp_type == OtpType::Hotp {
+                e.counter += 1;
+            }
+            e.mark_used();
+            vault.save()?;
+            Ok(())
+        }
+        Command::Backup { dir, keep } => {
+            let dir = dir.unwrap_or_else(|| path.with_file_name("backups"));
+            let ts = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+            let file = andotp_core::vault::backup_file(&path, &dir, &ts)
+                .with_context(|| format!("cannot back up {}", path.display()))?;
+            println!("Backed up to {}", file.display());
+            if let Some(keep) = keep {
+                let removed = backup::prune(&dir, keep)?;
+                if removed > 0 {
+                    println!("Removed {removed} old backup(s).");
+                }
+            }
+            Ok(())
+        }
+        Command::Keychain { action } => match action {
+            KeychainAction::Enable => {
+                let password = match std::env::var("ANDOTP_PASSWORD") {
+                    Ok(pw) => Zeroizing::new(pw),
+                    Err(_) => prompt_secret("Vault password: ")?,
+                };
+                Vault::open(&path, &password).context("cannot unlock vault")?;
+                keychain::store(&path, &password)?;
+                println!("Password stored in the system keychain.");
+                Ok(())
+            }
+            KeychainAction::Disable => {
+                keychain::delete(&path)?;
+                println!("Password removed from the system keychain.");
+                Ok(())
+            }
+            KeychainAction::Status => {
+                let stored = keychain::load(&path)?.is_some();
+                println!("{}", if stored { "stored" } else { "not stored" });
+                Ok(())
+            }
+        },
+        Command::Panic { yes } => {
+            if !yes
+                && !confirm(&format!(
+                    "Destroy {} and all accounts in it? This cannot be undone. [y/N] ",
+                    path.display()
+                ))?
+            {
+                bail!("aborted");
+            }
+            let removed = andotp_core::vault::wipe(&path)?;
+            // The vault is gone either way; a missing keychain service is not an error here.
+            let _ = keychain::delete(&path);
+            println!("Wiped {removed} file(s).");
             Ok(())
         }
     }
@@ -336,10 +452,17 @@ fn open(path: &Path) -> Result<Vault> {
     if !path.exists() {
         bail!("no vault at {} – run `andotp init` first", path.display());
     }
-    let password = match std::env::var("ANDOTP_PASSWORD") {
-        Ok(pw) => Zeroizing::new(pw),
-        Err(_) => prompt_secret("Vault password: ")?,
-    };
+    if let Ok(pw) = std::env::var("ANDOTP_PASSWORD") {
+        return Vault::open(path, &pw).context("cannot unlock vault");
+    }
+    // A stored password that no longer matches falls through to the prompt.
+    if let Ok(Some(pw)) = keychain::load(path) {
+        if let Ok(vault) = Vault::open(path, &pw) {
+            return Ok(vault);
+        }
+        eprintln!("warning: the password in the system keychain is out of date");
+    }
+    let password = prompt_secret("Vault password: ")?;
     Vault::open(path, &password).context("cannot unlock vault")
 }
 
