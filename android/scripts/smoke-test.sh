@@ -34,6 +34,10 @@ wait_for_focus() {
 }
 
 adb install -r "$apk"
+# Right after an install Android may still update the package's resources, which recreates a
+# running activity. The app survives that (MainActivity.onDestroy), but give it a moment so the
+# typing below doesn't go to a dying window.
+sleep 5
 adb logcat -c
 
 # Typing goes to whichever field has the keyboard focus; if the app was not ready yet, the
@@ -78,4 +82,19 @@ adb shell am start -n "$activity"
 wait_for_focus 60 || fail "the app did not come back to the foreground"
 alive || fail "the app exited after resuming"
 shot 3-resumed
+
+# Back closes the activity. Its onDestroy must not hang (the Rust thread never returns on its
+# own); a hang shows up as an ANR after a few seconds.
+adb shell input keyevent KEYCODE_BACK
+sleep 10
+if adb logcat -d -b events | grep -q "am_anr.*$pkg"; then
+    fail "the app stopped responding when closed"
+fi
+
+# It starts again cleanly and the vault is still there.
+adb shell am start -n "$activity"
+wait_for_focus 60 || fail "the app did not start again after closing"
+alive || fail "the app exited after starting again"
+has_vault || fail "the vault is gone after closing the app"
+shot 4-restarted
 echo "Smoke test passed (attempt $attempt)"

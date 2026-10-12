@@ -263,11 +263,14 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onDestroy() {
         closeCamera();
-        if (cameraThread != null) {
-            cameraThread.quitSafely();
-            cameraThread = null;
-            cameraHandler = null;
-        }
+        // NativeActivity.onDestroy waits for the Rust thread (android_main) to return, but the
+        // winit event loop never returns on Android, so the main thread would hang until Android
+        // reports "not responding" and kills the app. That happens on Back and whenever Android
+        // recreates the activity (e.g. after resources change, which apps cannot opt out of).
+        // End the process instead: nothing is lost, as the vault is written on every change and
+        // the settings were saved when the window went away. If the activity was visible, Android
+        // starts it again in a fresh process.
+        android.os.Process.killProcess(android.os.Process.myPid());
         super.onDestroy();
     }
 
