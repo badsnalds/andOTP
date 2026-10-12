@@ -655,9 +655,9 @@ public class MainActivity extends NativeActivity {
     }
 
     private static boolean isCancel(int code) {
+        // "Use password" has its own listener (see authenticate), not an error code.
         return code == BiometricPrompt.BIOMETRIC_ERROR_USER_CANCELED
-                || code == BiometricPrompt.BIOMETRIC_ERROR_CANCELED
-                || code == BiometricPrompt.BIOMETRIC_ERROR_NEGATIVE_BUTTON;
+                || code == BiometricPrompt.BIOMETRIC_ERROR_CANCELED;
     }
 
     private void authenticate(Cipher cipher, String title, BiometricPrompt.AuthenticationCallback callback,
