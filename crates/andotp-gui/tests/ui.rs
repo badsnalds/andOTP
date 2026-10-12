@@ -28,7 +28,8 @@ fn vault_with_entries(dir: &Path) -> PathBuf {
 
 fn harness(path: &Path) -> Harness<'static, AndOtpApp> {
     let path = path.to_path_buf();
-    Harness::builder().with_size([440.0, 680.0]).build_eframe(move |cc| {
+    // About the logical size of a typical phone screen (Pixel 7: 412 × 915 dp).
+    Harness::builder().with_size([412.0, 860.0]).build_eframe(move |cc| {
         let mut app = AndOtpApp::new(cc);
         app.set_vault_path(path.clone());
         app
@@ -139,10 +140,8 @@ fn create_vault_and_add_entry_from_uri() {
     type_into(&mut harness, 1, Role::TextInput, uri);
     harness.run_steps(1);
     harness.get_by_label("Apply").click();
-    harness.run_steps(2);
-    // On a phone-sized window the form scrolls; Save is at the bottom.
-    harness.get_by_label("Save").scroll_to_me();
-    harness.run_steps(2);
+    // The link field closes and the dialog re-centres over the next frames.
+    harness.run_steps(5);
     harness.get_by_label("Save").click();
     harness.run_steps(3);
 

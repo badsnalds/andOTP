@@ -25,7 +25,8 @@ phone and import here, or the other way around.
 * **Organisation**: tags (match any or all), search, sorting (manual, issuer, label, last used, most used)
   and logos for about 350 known services. These are andOTP's original thumbnails, bundled with the app;
   nothing is downloaded, so no server learns which accounts you have.
-* **Desktop app**: light/dark/system theme, a countdown ring, click to copy, optional hide-until-clicked,
+* **Desktop app**: a look modelled on the [Mantine](https://mantine.dev) UI kit (its colour palette,
+  the Inter typeface, bordered inputs, filled buttons) in light, dark or system theme, a countdown ring, click to copy, optional hide-until-clicked,
   digit grouping and auto-lock after inactivity.
 * **Desktop versions of the Android-only features**:
 
@@ -142,3 +143,6 @@ andOTP was created by [Jakob Nixdorf](https://github.com/flocke) and contributor
 ## License
 
 MIT – see [LICENSE.txt](LICENSE.txt).
+
+The bundled [Inter](https://rsms.me/inter/) font (Latin subset) is under the SIL Open Font License –
+see [crates/andotp-gui/fonts/Inter-LICENSE.txt](crates/andotp-gui/fonts/Inter-LICENSE.txt).

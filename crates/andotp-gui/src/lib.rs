@@ -10,6 +10,7 @@ pub mod renderer;
 #[cfg(camera)]
 mod scanner;
 mod style;
+mod theme;
 mod thumbnails;
 #[cfg(all(feature = "webcam", not(target_os = "android")))]
 mod webcam;

@@ -270,6 +270,7 @@ enum Action {
 impl AndOtpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
+        crate::theme::apply(&cc.egui_ctx);
         apply_theme(&cc.egui_ctx, settings.theme);
         cc.egui_ctx.all_styles_mut(|style| {
             // Text is read and tapped, not selected: selectable labels would swallow card taps.
@@ -360,7 +361,7 @@ impl AndOtpApp {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.15);
                 ui.label(RichText::new("🔐").size(56.0));
-                ui.heading(RichText::new("andOTP").size(28.0).strong());
+                ui.label(crate::theme::semibold("andOTP", 28.0));
                 ui.add_space(4.0);
                 ui.label(if exists {
                     "Enter your password to unlock"
@@ -375,7 +376,7 @@ impl AndOtpApp {
                     egui::TextEdit::singleline(&mut *lock.password)
                         .password(true)
                         .hint_text("Password")
-                        .margin(egui::Margin::symmetric(10, 10))
+                        .margin(egui::Margin::symmetric(12, 10))
                         .desired_width(width),
                 );
                 // Focus the field once. Requesting focus restarts the input method, so doing it
@@ -391,7 +392,7 @@ impl AndOtpApp {
                         egui::TextEdit::singleline(&mut *lock.confirm)
                             .password(true)
                             .hint_text("Repeat password")
-                            .margin(egui::Margin::symmetric(10, 10))
+                            .margin(egui::Margin::symmetric(12, 10))
                             .desired_width(width),
                     );
                     submit = confirm.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -401,11 +402,7 @@ impl AndOtpApp {
                     ui.spinner();
                 } else {
                     let label = if exists { "Unlock" } else { "Create vault" };
-                    let button =
-                        egui::Button::new(RichText::new(label).strong().size(16.0).color(egui::Color32::WHITE))
-                            .fill(egui::Color32::from_rgb(0x1E, 0x88, 0xE5))
-                            .corner_radius(8.0);
-                    submit |= ui.add_sized([width, 42.0], button).clicked();
+                    submit |= ui.add_sized([width, 40.0], style::primary(ui, label)).clicked();
                 }
                 if use_keychain
                     && !busy
@@ -851,11 +848,12 @@ fn entry_card(
     let card = ui.scope_builder(egui::UiBuilder::new().id_salt(("card", idx)).sense(egui::Sense::click()), |ui| {
         let hovered = ui.response().hovered();
         let visuals = ui.visuals();
-        let fill = if hovered { visuals.widgets.hovered.weak_bg_fill } else { visuals.faint_bg_color };
+        // Mantine `Card withBorder`.
+        let fill = if hovered { visuals.faint_bg_color } else { visuals.window_fill };
         egui::Frame::new()
             .fill(fill)
             .stroke(visuals.widgets.noninteractive.bg_stroke)
-            .corner_radius(14.0)
+            .corner_radius(crate::theme::RADIUS_MD)
             .inner_margin(egui::Margin::symmetric(14, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -874,7 +872,7 @@ fn entry_card(
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 entry_menu(ui, idx, manual, count, actions);
                                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.add(egui::Label::new(RichText::new(title).strong().size(16.0)).truncate());
+                                    ui.add(egui::Label::new(crate::theme::semibold(title, 15.0)).truncate());
                                 });
                             });
                         });
@@ -998,10 +996,12 @@ fn dialog_ui(
     let mut scan_image = false;
     let width = style::dialog_width(ctx);
     let max_height = ctx.content_rect().height() * 0.85;
-    let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::new("dialog")).frame(style::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(width);
         // The modal area starts out smaller than the screen; let long dialogs use most of it.
         ui.set_max_height(max_height);
+        // A solid scroll bar: the default floating one is drawn over the inputs' right edge.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| match dialog {
             Dialog::Entry(form) => {
                 let original = form.index.map(|i| &session.vault.entries[i]);
