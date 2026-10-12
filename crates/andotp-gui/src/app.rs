@@ -265,16 +265,16 @@ impl AndOtpApp {
 
                 ui.add_space(24.0);
                 ui.label(RichText::new(path.display().to_string()).small().weak());
-                if !busy && ui.small_button("Use another vault file…").clicked() {
-                    if let Some(p) = rfd::FileDialog::new()
+                if !busy
+                    && ui.small_button("Use another vault file…").clicked()
+                    && let Some(p) = rfd::FileDialog::new()
                         .set_title("Choose or create a vault file")
                         .add_filter("andOTP vault", &["aes"])
                         .set_file_name(andotp_core::vault::FILE_NAME)
                         .save_file()
-                    {
-                        self.settings.vault_path = Some(p);
-                        self.vault_override = None;
-                    }
+                {
+                    self.settings.vault_path = Some(p);
+                    self.vault_override = None;
                 }
             });
         });
@@ -297,37 +297,33 @@ impl AndOtpApp {
                     if ui.button("➕ Add account…").clicked() {
                         session.dialog = Some(Dialog::Entry(EntryForm::default()));
                     }
-                    if ui.button("📷 Scan QR code from image…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
+                    if ui.button("📷 Scan QR code from image…").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
                             .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"])
                             .pick_file()
-                        {
-                            match widgets::scan_qr(&path)
-                                .and_then(|uri| Entry::from_uri(&uri).map_err(|e| e.to_string()))
-                            {
-                                Ok(entry) => session.dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
-                                Err(err) => messages.push((err, true)),
-                            }
+                    {
+                        match widgets::scan_qr(&path).and_then(|uri| Entry::from_uri(&uri).map_err(|e| e.to_string())) {
+                            Ok(entry) => session.dialog = Some(Dialog::Entry(EntryForm::from_entry(None, &entry))),
+                            Err(err) => messages.push((err, true)),
                         }
                     }
                     ui.separator();
-                    if ui.button("📥 Import backup…").clicked() {
-                        if let Some(path) =
+                    if ui.button("📥 Import backup…").clicked()
+                        && let Some(path) =
                             rfd::FileDialog::new().add_filter("andOTP backups", &["json", "aes"]).pick_file()
-                        {
-                            match std::fs::read(&path) {
-                                Ok(data) => match backup::import(&data, None) {
-                                    Ok((entries, _)) => messages.push(import_entries(&mut session.vault, entries)),
-                                    Err(_) => {
-                                        session.dialog = Some(Dialog::ImportPassword {
-                                            data,
-                                            password: Zeroizing::default(),
-                                            error: None,
-                                        })
-                                    }
-                                },
-                                Err(err) => messages.push((format!("Cannot read file: {err}"), true)),
-                            }
+                    {
+                        match std::fs::read(&path) {
+                            Ok(data) => match backup::import(&data, None) {
+                                Ok((entries, _)) => messages.push(import_entries(&mut session.vault, entries)),
+                                Err(_) => {
+                                    session.dialog = Some(Dialog::ImportPassword {
+                                        data,
+                                        password: Zeroizing::default(),
+                                        error: None,
+                                    })
+                                }
+                            },
+                            Err(err) => messages.push((format!("Cannot read file: {err}"), true)),
                         }
                     }
                     if ui.button("📤 Export encrypted backup…").clicked() {
@@ -491,10 +487,8 @@ impl AndOtpApp {
             messages.push(msg);
         }
 
-        if dirty {
-            if let Err(err) = session.vault.save() {
-                messages.push((format!("Saving failed: {err}"), true));
-            }
+        if dirty && let Err(err) = session.vault.save() {
+            messages.push((format!("Saving failed: {err}"), true));
         }
 
         for (text, error) in messages {
@@ -613,11 +607,12 @@ fn entry_card(
                     if code.clicked() {
                         actions.push(if revealed { Action::Copy(idx) } else { Action::Reveal(idx) });
                     }
-                    if revealed && settings.show_previous {
-                        if let Some(prev) = &token.previous {
-                            ui.label(RichText::new(otp::group_token(prev, settings.group_size)).monospace().weak())
-                                .on_hover_text("Previous token");
-                        }
+                    if revealed
+                        && settings.show_previous
+                        && let Some(prev) = &token.previous
+                    {
+                        ui.label(RichText::new(otp::group_token(prev, settings.group_size)).monospace().weak())
+                            .on_hover_text("Previous token");
                     }
                 });
             });
