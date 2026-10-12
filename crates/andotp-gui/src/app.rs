@@ -252,6 +252,9 @@ pub struct AndOtpApp {
     inbox: Arc<Mutex<Vec<(String, bool)>>>,
     /// Renderer stored for the next start.
     renderer: Renderer,
+    /// Whether the window had the focus last frame (Android keyboard handling).
+    #[cfg(target_os = "android")]
+    window_focused: bool,
 }
 
 /// Something the user asked for while the UI was being drawn.
@@ -292,6 +295,8 @@ impl AndOtpApp {
             keychain_tried: false,
             inbox: Arc::default(),
             renderer: Renderer::load(),
+            #[cfg(target_os = "android")]
+            window_focused: false,
         }
     }
 
@@ -381,7 +386,7 @@ impl AndOtpApp {
                 );
                 // Focus the field once. Requesting focus restarts the input method, so doing it
                 // every frame makes the Android keyboard blink.
-                if !busy && !lock.autofocused && nothing_focused(ui) {
+                if !busy && !lock.autofocused && can_autofocus(ui) {
                     pw.request_focus();
                     lock.autofocused = true;
                 }
@@ -1073,7 +1078,7 @@ fn dialog_ui(
                 ui.heading("Encrypted backup");
                 ui.label("Enter the password of the backup:");
                 let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true));
-                if !*autofocused && nothing_focused(ui) {
+                if !*autofocused && can_autofocus(ui) {
                     edit.request_focus();
                     *autofocused = true;
                 }
@@ -1491,9 +1496,22 @@ fn dialog_ui(
     message
 }
 
-/// Whether no widget has the keyboard focus (so focusing one will not steal it or restart the IME).
-fn nothing_focused(ui: &egui::Ui) -> bool {
-    ui.memory(|m| m.focused().is_none())
+/// Whether a field may take the focus (and open the keyboard) on its own: nothing else has it,
+/// and the window itself is focused. On Android a keyboard requested while the window is not
+/// focused yet (e.g. right after the file picker closes) is hidden again by the system.
+fn can_autofocus(ui: &egui::Ui) -> bool {
+    ui.memory(|m| m.focused().is_none()) && ui.input(|i| i.focused)
+}
+
+/// Android hides the keyboard whenever the window regains focus (back from the file picker or
+/// another app). egui only asks for it when a field gains focus, so ask again here.
+#[cfg(target_os = "android")]
+fn restore_keyboard(ctx: &egui::Context, was_focused: &mut bool) {
+    let focused = ctx.input(|i| i.focused);
+    if focused && !*was_focused && ctx.egui_wants_keyboard_input() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
+    }
+    *was_focused = focused;
 }
 
 fn apply_theme(ctx: &egui::Context, theme: Theme) {
@@ -1509,6 +1527,7 @@ impl eframe::App for AndOtpApp {
         // Keep clear of the Android status and navigation bars.
         #[cfg(target_os = "android")]
         {
+            restore_keyboard(ui.ctx(), &mut self.window_focused);
             let ppp = ui.ctx().pixels_per_point();
             let (top, bottom) = crate::android::insets_px();
             let margin = egui::Margin {

@@ -237,6 +237,28 @@ fn dismissed_keyboard_stays_closed() {
     }
 }
 
+/// A field must not grab the keyboard while the window is not focused (on Android the system
+/// hides such a keyboard again, e.g. right after the file picker closes); it does once focused.
+#[test]
+fn autofocus_waits_for_the_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_with_entries(dir.path());
+    let mut harness = harness(&path);
+    unlock(&mut harness, PASSWORD);
+    wait_for(&mut harness, "the entry list", |h| shows(h, "octocat"));
+
+    // Lock while the window is in the background: the new lock screen must wait.
+    harness.input_mut().focused = false;
+    harness.get_by_label("🔒").click();
+    harness.run_steps(3);
+    assert_shows(&harness, "Enter your password to unlock");
+    assert!(harness.output().platform_output.ime.is_none(), "keyboard requested while unfocused");
+
+    harness.input_mut().focused = true;
+    harness.run_steps(2);
+    assert!(harness.output().platform_output.ime.is_some(), "the password field should get the keyboard");
+}
+
 /// Tapping anywhere on an account card copies its token.
 #[test]
 fn tapping_a_card_copies_the_token() {
