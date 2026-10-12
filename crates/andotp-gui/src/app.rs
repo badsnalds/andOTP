@@ -21,6 +21,7 @@ use crate::renderer::Renderer;
 #[cfg(camera)]
 use crate::scanner;
 use crate::style;
+use crate::theme;
 use crate::widgets;
 
 const SETTINGS_KEY: &str = "settings";
@@ -483,9 +484,9 @@ impl AndOtpApp {
 
         // Top bar: search, filters and menu.
         egui::Panel::top("top").show(ui, |ui| {
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.menu_button("☰", |ui| {
+                egui::containers::menu::MenuButton::from_button(style::icon_button("☰")).ui(ui, |ui| {
                     if ui.button("➕ Add account…").clicked() {
                         session.dialog = Some(Dialog::Entry(EntryForm::default()));
                     }
@@ -541,15 +542,17 @@ impl AndOtpApp {
                         session.dialog = Some(Dialog::Wipe { confirm: String::new(), error: None });
                     }
                 });
+                let spacing = ui.spacing().item_spacing.x;
                 ui.add(
-                    egui::TextEdit::singleline(&mut session.query)
+                    style::text_field(&mut session.query)
                         .hint_text("🔍 Search")
-                        .desired_width(ui.available_width() - 110.0),
+                        .desired_width(ui.available_width() - 2.0 * (36.0 + spacing)),
                 );
-                if ui.button("🔒").on_hover_text("Lock").clicked() {
+                if ui.add(style::icon_button("🔒")).on_hover_text("Lock").clicked() {
                     lock_requested = true;
                 }
-                if ui.button("➕").on_hover_text("Add account").clicked() {
+                let add = style::primary(ui, "➕").min_size(egui::vec2(36.0, 36.0));
+                if ui.add(add).on_hover_text("Add account").clicked() {
                     session.dialog = Some(Dialog::Entry(EntryForm::default()));
                 }
             });
@@ -1042,17 +1045,16 @@ fn dialog_ui(
             }
             Dialog::ConfirmDelete(i) => {
                 let i = *i;
-                ui.heading("Delete account?");
-                ui.label(format!(
-                    "“{}” will be removed. Make sure you no longer need it or have another way to sign in.",
-                    session.vault.entries[i].display_name()
-                ));
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                    if ui.button(RichText::new("Delete").color(ui.visuals().error_fg_color)).clicked() {
+                style::header(
+                    ui,
+                    "Delete account?",
+                    &format!(
+                        "“{}” will be removed. Make sure you no longer need it or have another way to sign in.",
+                        session.vault.entries[i].display_name()
+                    ),
+                );
+                style::button_row(ui, |ui| {
+                    if style::danger_button(ui, "Delete", true).clicked() {
                         session.vault.entries.remove(i);
                         session.pins.clear();
                         session.revealed.clear();
@@ -1062,35 +1064,43 @@ fn dialog_ui(
                         });
                         close = true;
                     }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
+                    }
                 });
             }
             Dialog::Qr { title, texture } => {
-                ui.heading(title.as_str());
-                ui.label("Scan with andOTP or another authenticator app. Anyone who sees this code can generate your tokens.");
+                style::header(ui, title, "Scan with andOTP or another authenticator app.");
                 ui.vertical_centered(|ui| {
-                    ui.add(egui::Image::new(&*texture).fit_to_exact_size(egui::vec2(280.0, 280.0)));
+                    let side = ui.available_width().min(260.0);
+                    ui.add(
+                        egui::Image::new(&*texture)
+                            .corner_radius(theme::RADIUS_MD)
+                            .fit_to_exact_size(egui::vec2(side, side)),
+                    );
                 });
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
+                ui.add_space(8.0);
+                style::alert(ui, ui.visuals().warn_fg_color, "Anyone who sees this code can generate your tokens.");
+                style::button_row(ui, |ui| {
+                    if style::secondary_button(ui, "Close").clicked() {
+                        close = true;
+                    }
+                });
             }
             Dialog::ImportPassword { data, password, error, autofocused } => {
-                ui.heading("Encrypted backup");
-                ui.label("Enter the password of the backup:");
-                let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true));
+                style::header(ui, "Encrypted backup", "Enter the password this backup was protected with.");
+                style::label(ui, "Backup password");
+                let edit = ui.add(style::text_field(&mut **password).password(true));
                 if !*autofocused && can_autofocus(ui) {
                     edit.request_focus();
                     *autofocused = true;
                 }
                 if let Some(err) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                    style::error(ui, err);
                 }
                 let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                    if ui.button("Import").clicked() || enter {
+                style::button_row(ui, |ui| {
+                    if style::primary_button(ui, "Import").clicked() || enter {
                         match backup::import(data, Some(password)) {
                             Ok((entries, _)) => {
                                 message = Some(import_entries(&mut session.vault, settings, entries));
@@ -1098,6 +1108,9 @@ fn dialog_ui(
                             }
                             Err(err) => *error = Some(format!("Cannot decrypt: {err}")),
                         }
+                    }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
                     }
                 });
             }
@@ -1211,17 +1224,20 @@ fn dialog_ui(
                 });
             }
             Dialog::ChangePassword { password, confirm, error } => {
-                ui.heading("Change password");
-                ui.add(egui::TextEdit::singleline(&mut **password).password(true).hint_text("New password"));
-                ui.add(egui::TextEdit::singleline(&mut **confirm).password(true).hint_text("Repeat new password"));
+                style::header(ui, "Change password", "Your accounts are encrypted again with the new password.");
+                style::label(ui, "New password");
+                ui.add(
+                    style::text_field(&mut **password)
+                        .password(true)
+                        .hint_text(format!("At least {MIN_PASSWORD_LENGTH} characters")),
+                );
+                style::label(ui, "Repeat new password");
+                ui.add(style::text_field(&mut **confirm).password(true));
                 if let Some(err) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                    style::error(ui, err);
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
-                    if ui.button("Change").clicked() {
+                style::button_row(ui, |ui| {
+                    if style::primary_button(ui, "Change").clicked() {
                         if password.chars().count() < MIN_PASSWORD_LENGTH {
                             *error = Some(format!("Use at least {MIN_PASSWORD_LENGTH} characters"));
                         } else if **password != **confirm {
@@ -1245,49 +1261,47 @@ fn dialog_ui(
                             }
                         }
                     }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
+                    }
                 });
             }
             Dialog::Settings => {
-                ui.heading("Settings");
-                if settings.auto_backup && settings.backup_dir.is_none() {
-                    ui.colored_label(ui.visuals().warn_fg_color, "Choose a folder for automatic backups.");
+                style::header(ui, "Settings", "");
+                let width = ui.available_width();
+
+                style::section(ui, "Appearance");
+                style::label(ui, "Theme");
+                let themes = [(Theme::System, "System"), (Theme::Light, "Light"), (Theme::Dark, "Dark")];
+                if style::segmented(ui, &mut settings.theme, &themes, width) {
+                    apply_theme(ctx, settings.theme);
                 }
-                egui::Grid::new("settings").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-                    ui.label("Theme");
-                    ui.horizontal(|ui| {
-                        for (theme, label) in [(Theme::System, "System"), (Theme::Light, "Light"), (Theme::Dark, "Dark")] {
-                            if ui.selectable_value(&mut settings.theme, theme, label).changed() {
-                                apply_theme(ctx, theme);
-                            }
-                        }
-                    });
-                    ui.end_row();
+                style::label(ui, "Group digits");
+                let groups = [(0, "Off"), (2, "2"), (3, "3"), (4, "4")];
+                style::segmented(ui, &mut settings.group_size, &groups, width);
 
-                    ui.label("Digit grouping");
-                    ui.add(egui::Slider::new(&mut settings.group_size, 0..=5).text("digits"));
-                    ui.end_row();
-
-                    ui.label("Auto-lock");
-                    ui.add(egui::Slider::new(&mut settings.auto_lock_minutes, 0..=60).text("min (0 = never)"));
-                    ui.end_row();
-
-                    ui.label("Privacy");
-                    ui.checkbox(&mut settings.tap_to_reveal, "Hide tokens until clicked");
-                    ui.end_row();
-
-                    ui.label("");
-                    ui.checkbox(&mut settings.show_previous, "Show previous token");
-                    ui.end_row();
-
-                    // Desktop only: on Android these need platform services we do not use.
-                    if DESKTOP {
-                    ui.label("Keychain");
+                style::section(ui, "Security");
+                style::label(ui, "Lock after");
+                let locks = [(0, "Never"), (1, "1 min"), (5, "5 min"), (15, "15 min"), (60, "1 h")];
+                style::segmented(ui, &mut settings.auto_lock_minutes, &locks, width);
+                ui.add_space(4.0);
+                style::setting_row(ui, "Hide tokens", "Show a token only after tapping it", 40.0, |ui| {
+                    style::switch(ui, &mut settings.tap_to_reveal, "Hide tokens")
+                });
+                style::setting_row(ui, "Previous token", "Also show the token of the last period", 40.0, |ui| {
+                    style::switch(ui, &mut settings.show_previous, "Previous token")
+                });
+                // Desktop only: on Android these need platform services we do not use.
+                if DESKTOP {
                     let mut keychain_on = settings.keychain;
-                    if ui
-                        .checkbox(&mut keychain_on, "Unlock with the system keychain")
-                        .on_hover_text("Stores the vault password in the OS credential store")
-                        .changed()
-                    {
+                    let toggled = style::setting_row(
+                        ui,
+                        "System keychain",
+                        "Unlock with the password stored in the OS credential store",
+                        40.0,
+                        |ui| style::switch(ui, &mut keychain_on, "System keychain").changed(),
+                    );
+                    if toggled {
                         if keychain_on {
                             open_keychain_dialog = true;
                         } else {
@@ -1297,71 +1311,81 @@ fn dialog_ui(
                             }
                         }
                     }
-                    ui.end_row();
 
-                    ui.label("Backups");
-                    ui.checkbox(&mut settings.auto_backup, "Back up automatically after every change");
-                    ui.end_row();
-
+                    style::section(ui, "Backups");
+                    style::setting_row(
+                        ui,
+                        "Automatic backups",
+                        "Copy the encrypted vault after every change",
+                        40.0,
+                        |ui| style::switch(ui, &mut settings.auto_backup, "Automatic backups"),
+                    );
                     if settings.auto_backup {
-                        ui.label("");
-                        ui.horizontal(|ui| {
-                            let label = settings
-                                .backup_dir
-                                .as_ref()
-                                .map_or_else(|| "Choose folder…".to_owned(), |d| d.display().to_string());
-                            if ui.button(label).clicked()
-                                && let Some(dir) = rfd::FileDialog::new().set_title("Backup folder").pick_folder()
-                            {
-                                settings.backup_dir = Some(dir);
-                                message = Some(match auto_backup(&session.vault, settings) {
-                                    Ok(()) => ("Backup written".into(), false),
-                                    Err(err) => (err, true),
-                                });
-                            }
-                        });
-                        ui.end_row();
-
-                        ui.label("");
-                        ui.add(egui::Slider::new(&mut settings.backup_keep, 0..=100).text("kept (0 = all)"));
-                        ui.end_row();
-                    }
-
-                    ui.label("Renderer");
-                    ui.horizontal(|ui| {
-                        for choice in [Renderer::Glow, Renderer::Wgpu] {
-                            if ui.selectable_value(renderer, choice, choice.label()).changed() {
-                                message = Some(match renderer.save() {
-                                    Ok(()) => ("Takes effect after a restart".into(), false),
-                                    Err(err) => (format!("Cannot save the renderer choice: {err}"), true),
-                                });
-                            }
+                        if settings.backup_dir.is_none() {
+                            style::alert(ui, ui.visuals().warn_fg_color, "Choose a folder for automatic backups.");
                         }
-                    });
-                    ui.end_row();
+                        style::label(ui, "Folder");
+                        let label = settings
+                            .backup_dir
+                            .as_ref()
+                            .map_or_else(|| "Choose folder…".to_owned(), |d| d.display().to_string());
+                        let button = egui::Button::new(RichText::new(format!("📁 {label}")).size(13.0))
+                            .truncate()
+                            .corner_radius(theme::RADIUS_SM)
+                            .min_size(egui::vec2(width, 34.0));
+                        if ui.add(button).clicked()
+                            && let Some(dir) = rfd::FileDialog::new().set_title("Backup folder").pick_folder()
+                        {
+                            settings.backup_dir = Some(dir);
+                            message = Some(match auto_backup(&session.vault, settings) {
+                                Ok(()) => ("Backup written".into(), false),
+                                Err(err) => (err, true),
+                            });
+                        }
+                        ui.add_space(4.0);
+                        style::setting_row(ui, "Backups to keep", "0 keeps all of them", 90.0, |ui| {
+                            ui.add(egui::DragValue::new(&mut settings.backup_keep).range(0..=100).speed(0.2))
+                        });
                     }
-                });
-                ui.label(RichText::new(format!("Vault: {}", session.vault.path().display())).small().weak());
-                if ui.button("Close").clicked() {
-                    close = true;
+
+                    style::section(ui, "Advanced");
+                    style::label(ui, "Renderer");
+                    let choices = [(Renderer::Glow, "OpenGL"), (Renderer::Wgpu, "wgpu")];
+                    if style::segmented(ui, renderer, &choices, width) {
+                        message = Some(match renderer.save() {
+                            Ok(()) => ("Takes effect after a restart".into(), false),
+                            Err(err) => (format!("Cannot save the renderer choice: {err}"), true),
+                        });
+                    }
                 }
-            }
-            Dialog::KeychainEnable { password, error } => {
-                ui.heading("Unlock with the system keychain");
-                ui.label(
-                    "Your vault password will be stored in the operating system's credential store, \
-                     so andOTP can unlock without asking while you are logged in.",
+                ui.add_space(8.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("Vault: {}", session.vault.path().display())).size(11.0).weak(),
+                    )
+                    .truncate(),
                 );
-                let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true).hint_text("Vault password"));
-                if let Some(err) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
-                }
-                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
+                style::button_row(ui, |ui| {
+                    if style::secondary_button(ui, "Close").clicked() {
                         close = true;
                     }
-                    if ui.button("Enable").clicked() || enter {
+                });
+            }
+            Dialog::KeychainEnable { password, error } => {
+                style::header(
+                    ui,
+                    "Unlock with the system keychain",
+                    "Your vault password is stored in the operating system's credential store, so andOTP \
+                     can unlock without asking while you are logged in.",
+                );
+                style::label(ui, "Vault password");
+                let edit = ui.add(style::text_field(&mut **password).password(true));
+                if let Some(err) = error {
+                    style::error(ui, err);
+                }
+                let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                style::button_row(ui, |ui| {
+                    if style::primary_button(ui, "Enable").clicked() || enter {
                         let path = session.vault.path().to_path_buf();
                         match Vault::open(&path, password) {
                             Err(andotp_core::Error::Decryption) => *error = Some("Wrong password".into()),
@@ -1376,28 +1400,32 @@ fn dialog_ui(
                             },
                         }
                     }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
+                    }
                 });
             }
             Dialog::Wipe { confirm, error } => {
-                ui.heading(RichText::new("☢ Wipe all data").color(ui.visuals().error_fg_color));
-                ui.label(format!(
-                    "This irrecoverably destroys the vault with all {} accounts and removes the password from \
-                     the system keychain. Backups are not touched. Make sure you can still sign in to your \
-                     accounts.",
-                    session.vault.entries.len()
-                ));
-                ui.label(format!("Type {WIPE_CONFIRMATION} to confirm:"));
-                ui.text_edit_singleline(confirm);
+                ui.label(theme::semibold("☢ Wipe all data", 18.0).color(ui.visuals().error_fg_color));
+                ui.add_space(6.0);
+                style::alert(
+                    ui,
+                    ui.visuals().error_fg_color,
+                    &format!(
+                        "This destroys the vault with all {} accounts for good and removes the password from \
+                         the system keychain. Backups are not touched. Make sure you can still sign in to your \
+                         accounts.",
+                        session.vault.entries.len()
+                    ),
+                );
+                style::label(ui, &format!("Type {WIPE_CONFIRMATION} to confirm"));
+                ui.add(style::text_field(confirm));
                 if let Some(err) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, err.as_str());
+                    style::error(ui, err);
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        close = true;
-                    }
+                style::button_row(ui, |ui| {
                     let armed = confirm.trim() == WIPE_CONFIRMATION;
-                    let button = egui::Button::new(RichText::new("Wipe").color(ui.visuals().error_fg_color));
-                    if ui.add_enabled(armed, button).clicked() {
+                    if style::danger_button(ui, "Wipe", armed).clicked() {
                         let path = session.vault.path().to_path_buf();
                         match andotp_core::vault::wipe(&path) {
                             Ok(_) => {
@@ -1410,6 +1438,9 @@ fn dialog_ui(
                             }
                             Err(err) => *error = Some(format!("Wiping failed: {err}")),
                         }
+                    }
+                    if style::secondary_button(ui, "Cancel").clicked() {
+                        close = true;
                     }
                 });
             }
@@ -1465,15 +1496,26 @@ fn dialog_ui(
                 });
             }
             Dialog::About => {
-                ui.heading(format!("andOTP {}", env!("CARGO_PKG_VERSION")));
-                ui.label("Open-source two-factor authenticator, rewritten in Rust.");
-                ui.label("Supports TOTP (RFC 6238), HOTP (RFC 4226), Steam Guard and mOTP.");
-                ui.label("Backups are compatible with andOTP for Android.");
+                style::header(
+                    ui,
+                    &format!("andOTP {}", env!("CARGO_PKG_VERSION")),
+                    "Open-source two-factor authenticator, rewritten in Rust.",
+                );
+                ui.label(RichText::new("Supports TOTP (RFC 6238), HOTP (RFC 4226), Steam Guard and mOTP.").size(13.0));
+                ui.label(RichText::new("Backups are compatible with andOTP for Android.").size(13.0));
+                ui.add_space(4.0);
                 ui.hyperlink("https://github.com/badsnalds/andOTP");
-                ui.label(RichText::new("MIT licensed. © andOTP contributors, Jakob Nixdorf, Bruno Bierbaumer.").small().weak());
-                if ui.button("Close").clicked() {
-                    close = true;
-                }
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("MIT licensed. © andOTP contributors, Jakob Nixdorf, Bruno Bierbaumer.")
+                        .size(11.0)
+                        .weak(),
+                );
+                style::button_row(ui, |ui| {
+                    if style::secondary_button(ui, "Close").clicked() {
+                        close = true;
+                    }
+                });
             }
         });
     });

@@ -23,7 +23,9 @@
  * New: account cards redesigned for phones (two lines, tap to copy, larger touch targets)
  * New: redesigned Add account dialog (Camera / Image / Paste link at the top, advanced options folded away) and a single Export dialog with an encrypted or plain-text choice
  * New: Mantine-style look: Mantine's light and dark palettes, the Inter font (bundled, Latin subset), 36 px bordered inputs, filled primary buttons, radio cards and padded modals
- * New: Android camera QR scanning (Camera2; the camera permission is asked for only when scanning)
+ * New: compact Mantine-style dialogs everywhere: settings grouped into sections with switches and segmented controls, labelled password fields, red buttons for destructive actions, Mantine-style top bar
+ * New: Android camera QR scanning (Camera2; the camera permission is asked for only when scanning). The preview runs independently of QR decoding, which works on the newest frame only
+ * Bugfix: Android: the keyboard closed again when the backup password dialog opened after the file picker
  * Bugfix: the `Charles_Schwab` thumbnail name was missing from the service list
  * New: Android app built from the same Rust UI, with the system file picker for import/export, QR scanning from images and a sensitive clipboard; CI builds the APK and checks it on an emulator
 

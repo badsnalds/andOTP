@@ -32,7 +32,7 @@ pub fn header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 
 /// An input label (Mantine `Input.Label`).
 pub fn label(ui: &mut egui::Ui, text: &str) {
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.label(theme::semibold(text, 13.0));
 }
 
@@ -75,21 +75,21 @@ pub fn secondary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 /// A large tile button with an icon and a caption, for the main choices of a dialog.
 pub fn tile_button(ui: &mut egui::Ui, icon: &str, text: &str, width: f32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 68.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 58.0), egui::Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{icon}\n{text}")));
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact(&response);
         ui.painter().rect(rect, RADIUS_MD, visuals.bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
         let painter = ui.painter();
         painter.text(
-            rect.center() - egui::vec2(0.0, 10.0),
+            rect.center() - egui::vec2(0.0, 9.0),
             egui::Align2::CENTER_CENTER,
             icon,
             egui::FontId::proportional(20.0),
             theme::primary_text(ui),
         );
         painter.text(
-            rect.center() + egui::vec2(0.0, 14.0),
+            rect.center() + egui::vec2(0.0, 12.0),
             egui::Align2::CENTER_CENTER,
             text,
             egui::FontId::new(13.0, egui::FontFamily::Name(theme::SEMIBOLD.into())),
@@ -160,4 +160,151 @@ pub fn option_card(ui: &mut egui::Ui, selected: bool, icon: &str, title: &str, d
     }
     ui.add_space(6.0);
     response
+}
+
+/// A destructive action: a filled red button (Mantine `color="red"`).
+pub fn danger_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let red =
+        if ui.visuals().dark_mode { Color32::from_rgb(0xe0, 0x31, 0x31) } else { Color32::from_rgb(0xfa, 0x52, 0x52) };
+    let button = egui::Button::new(theme::semibold(text, 14.0).color(Color32::WHITE))
+        .fill(red)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(RADIUS_SM)
+        .min_size(egui::vec2(88.0, CONTROL_HEIGHT));
+    ui.add_enabled(enabled, button)
+}
+
+/// A small dimmed heading that groups the rows of a settings list.
+pub fn section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(10.0);
+    ui.label(theme::semibold(title.to_uppercase(), 11.0).color(ui.visuals().weak_text_color()));
+    ui.add_space(2.0);
+}
+
+/// A label with an optional description on the left and a control on the right, the layout of
+/// Mantine's Switch with `label` and `description`.
+pub fn setting_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    description: &str,
+    control_width: f32,
+    control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.horizontal(|ui| {
+        let text_width = (ui.available_width() - control_width - 12.0).max(80.0);
+        ui.vertical(|ui| {
+            ui.set_width(text_width);
+            ui.label(RichText::new(label).size(14.0));
+            if !description.is_empty() {
+                ui.add(egui::Label::new(RichText::new(description).size(12.0).weak()).wrap());
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control).inner
+    })
+    .inner
+}
+
+/// A Mantine Switch: a pill with a sliding knob. Returns true when toggled.
+pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    let size = egui::vec2(38.0, 22.0);
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, *on, label));
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool_responsive(response.id, *on);
+        let off = ui.visuals().widgets.inactive.bg_stroke.color;
+        let track = if *on {
+            theme::primary(ui)
+        } else {
+            if ui.visuals().dark_mode { off } else { Color32::from_rgb(0xe9, 0xec, 0xef) }
+        };
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            rect.height() / 2.0,
+            track,
+            egui::Stroke::new(1.0, if *on { track } else { off }),
+            egui::StrokeKind::Inside,
+        );
+        let radius = rect.height() / 2.0 - 3.0;
+        let x = egui::lerp((rect.left() + radius + 3.0)..=(rect.right() - radius - 3.0), t);
+        painter.circle_filled(egui::pos2(x, rect.center().y), radius, Color32::WHITE);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// A Mantine SegmentedControl: equal segments in a tinted track, the selected one raised.
+/// Returns true when the value changed.
+pub fn segmented<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)], width: f32) -> bool {
+    let height = 32.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let dark = ui.visuals().dark_mode;
+    let track = if dark { Color32::from_rgb(0x1f, 0x1f, 0x1f) } else { Color32::from_rgb(0xf1, 0xf3, 0xf5) };
+    ui.painter().rect_filled(rect, RADIUS_MD, track);
+    let segment = (rect.width() - 8.0) / options.len() as f32;
+    // Several controls can share a Ui: tell them apart by their first option.
+    let base = ui.make_persistent_id(("segmented", options.first().map(|o| o.1), options.len()));
+    let mut changed = false;
+    for (i, (option, text)) in options.iter().enumerate() {
+        let seg = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 4.0 + i as f32 * segment, rect.top() + 4.0),
+            egui::vec2(segment, height - 8.0),
+        );
+        let id = base.with(i);
+        let response = ui.interact(seg, id, egui::Sense::click());
+        let selected = *value == *option;
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, *text));
+        if response.clicked() && !selected {
+            *value = *option;
+            changed = true;
+        }
+        let painter = ui.painter();
+        if selected {
+            let fill = if dark { Color32::from_rgb(0x42, 0x42, 0x42) } else { Color32::WHITE };
+            painter.rect_filled(seg.translate(egui::vec2(0.0, 1.0)), RADIUS_SM, Color32::from_black_alpha(18));
+            painter.rect_filled(seg, RADIUS_SM, fill);
+        }
+        let color = if selected || response.hovered() {
+            ui.visuals().strong_text_color()
+        } else {
+            ui.visuals().weak_text_color()
+        };
+        painter.text(
+            seg.center(),
+            egui::Align2::CENTER_CENTER,
+            *text,
+            egui::FontId::new(13.0, egui::FontFamily::Name(theme::SEMIBOLD.into())),
+            color,
+        );
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    }
+    changed
+}
+
+/// A tinted message box (Mantine `Alert`, light variant).
+pub fn alert(ui: &mut egui::Ui, color: Color32, text: &str) {
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.12))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.5)))
+        .corner_radius(RADIUS_MD)
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(text).size(13.0).color(color)).wrap());
+        });
+}
+
+/// A square icon button (Mantine `ActionIcon`, default variant).
+pub fn icon_button(icon: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(icon).size(16.0))
+        .corner_radius(RADIUS_SM)
+        .min_size(egui::vec2(CONTROL_HEIGHT, CONTROL_HEIGHT))
 }
