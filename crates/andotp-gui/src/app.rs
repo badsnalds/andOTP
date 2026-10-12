@@ -270,6 +270,17 @@ impl AndOtpApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings: Settings = cc.storage.and_then(|s| eframe::get_value(s, SETTINGS_KEY)).unwrap_or_default();
         apply_theme(&cc.egui_ctx, settings.theme);
+        cc.egui_ctx.all_styles_mut(|style| {
+            // Text is read and tapped, not selected: selectable labels would swallow card taps.
+            style.interaction.selectable_labels = false;
+            // Comfortable touch targets on phones.
+            if !DESKTOP {
+                style.spacing.interact_size.y = 40.0;
+                style.spacing.button_padding = egui::vec2(12.0, 8.0);
+                style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+                style.spacing.menu_margin = egui::Margin::same(10);
+            }
+        });
         Self {
             settings,
             vault_override: None,
@@ -363,6 +374,7 @@ impl AndOtpApp {
                     egui::TextEdit::singleline(&mut *lock.password)
                         .password(true)
                         .hint_text("Password")
+                        .margin(egui::Margin::symmetric(10, 10))
                         .desired_width(width),
                 );
                 // Focus the field once. Requesting focus restarts the input method, so doing it
@@ -378,6 +390,7 @@ impl AndOtpApp {
                         egui::TextEdit::singleline(&mut *lock.confirm)
                             .password(true)
                             .hint_text("Repeat password")
+                            .margin(egui::Margin::symmetric(10, 10))
                             .desired_width(width),
                     );
                     submit = confirm.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -387,7 +400,11 @@ impl AndOtpApp {
                     ui.spinner();
                 } else {
                     let label = if exists { "Unlock" } else { "Create vault" };
-                    submit |= ui.add_sized([width, 32.0], egui::Button::new(RichText::new(label).strong())).clicked();
+                    let button =
+                        egui::Button::new(RichText::new(label).strong().size(16.0).color(egui::Color32::WHITE))
+                            .fill(egui::Color32::from_rgb(0x1E, 0x88, 0xE5))
+                            .corner_radius(8.0);
+                    submit |= ui.add_sized([width, 42.0], button).clicked();
                 }
                 if use_keychain
                     && !busy
@@ -431,7 +448,9 @@ impl AndOtpApp {
                 let busy = lock.pending.is_some();
 
                 ui.add_space(24.0);
-                ui.label(RichText::new(path.display().to_string()).small().weak());
+                if DESKTOP {
+                    ui.label(RichText::new(path.display().to_string()).small().weak());
+                }
                 if DESKTOP
                     && !busy
                     && ui.small_button("Use another vault file…").clicked()
@@ -610,6 +629,8 @@ impl AndOtpApp {
             let manual = settings.sort == SortMode::Unsorted;
             let count = session.vault.entries.len();
             egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                // Keep the cards clear of the scroll bar.
+                ui.set_max_width(ui.available_width() - 12.0);
                 for idx in view {
                     let entry = &session.vault.entries[idx];
                     let pin = session.pins.entry(idx).or_default();
@@ -802,6 +823,8 @@ fn import_entries(vault: &mut Vault, settings: &Settings, entries: Vec<Entry>) -
     }
 }
 
+/// One account: a two-line card that fits phone screens. Tapping the card copies the token (or
+/// reveals it first in "hide tokens" mode); the menu holds the other actions.
 #[allow(clippy::too_many_arguments)]
 fn entry_card(
     ui: &mut egui::Ui,
@@ -815,105 +838,139 @@ fn entry_card(
     actions: &mut Vec<Action>,
 ) {
     let token = entry.token(Some(pin.as_str()));
-    egui::Frame::group(ui.style())
-        .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(12, 10))
-        .fill(ui.visuals().faint_bg_color)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                let name = if entry.issuer.is_empty() { &entry.label } else { &entry.issuer };
-                widgets::letter_avatar(ui, name, 40.0);
-                ui.vertical(|ui| {
-                    if entry.issuer.is_empty() {
-                        ui.label(RichText::new(&entry.label).strong());
-                    } else {
-                        ui.label(RichText::new(&entry.issuer).strong());
-                        if !entry.label.is_empty() {
-                            ui.label(RichText::new(&entry.label).weak());
-                        }
-                    }
-                    if !entry.tags.is_empty() {
-                        ui.label(
-                            RichText::new(entry.tags.iter().map(|t| format!("🏷 {t}")).collect::<Vec<_>>().join("  "))
-                                .small()
-                                .weak(),
-                        );
-                    }
-                });
+    let needs_pin = entry.otp_type == OtpType::Motp && token.remaining.is_none();
+    let (title, subtitle) = if entry.issuer.is_empty() {
+        (entry.label.as_str(), "")
+    } else {
+        (entry.issuer.as_str(), entry.label.as_str())
+    };
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button("⏷", |ui| {
-                        if ui.button("✏ Edit").clicked() {
-                            actions.push(Action::Edit(idx));
+    // The card itself senses clicks; widgets inside it (menu, PIN field, ⟳) still get theirs.
+    let card = ui.scope_builder(egui::UiBuilder::new().id_salt(("card", idx)).sense(egui::Sense::click()), |ui| {
+        let hovered = ui.response().hovered();
+        let visuals = ui.visuals();
+        let fill = if hovered { visuals.widgets.hovered.weak_bg_fill } else { visuals.faint_bg_color };
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(visuals.widgets.noninteractive.bg_stroke)
+            .corner_radius(14.0)
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    widgets::letter_avatar(ui, title, 44.0);
+                    ui.add_space(6.0);
+                    ui.vertical(|ui| {
+                        // Line 1: name (cut short with … when too long) and the actions menu.
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                entry_menu(ui, idx, manual, count, actions);
+                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    ui.add(egui::Label::new(RichText::new(title).strong().size(16.0)).truncate());
+                                });
+                            });
+                        });
+                        if !subtitle.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(subtitle).weak()).truncate());
                         }
-                        if DESKTOP && ui.button("⌨ Type into last window").clicked() {
-                            actions.push(Action::Type(idx));
+                        if !entry.tags.is_empty() {
+                            let tags = entry.tags.iter().map(|t| format!("🏷 {t}")).collect::<Vec<_>>().join("  ");
+                            ui.add(egui::Label::new(RichText::new(tags).small().weak()).truncate());
                         }
-                        if ui.button("🔳 Show QR code").clicked() {
-                            actions.push(Action::ShowQr(idx));
-                        }
-                        if manual {
-                            if idx > 0 && ui.button("⬆ Move up").clicked() {
-                                actions.push(Action::MoveUp(idx));
-                            }
-                            if idx + 1 < count && ui.button("⬇ Move down").clicked() {
-                                actions.push(Action::MoveDown(idx));
-                            }
-                        }
-                        ui.separator();
-                        if ui.button(RichText::new("🗑 Delete").color(ui.visuals().error_fg_color)).clicked() {
-                            actions.push(Action::Delete(idx));
-                        }
+                        ui.add_space(4.0);
+
+                        // Line 2: the token, with its timer (or the HOTP "next" button) on the right.
+                        ui.horizontal(|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if let Some(remaining) = token.remaining {
+                                    widgets::countdown(ui, token.progress(), remaining, token.is_expiring(), 30.0)
+                                        .on_hover_text(format!("Changes in {remaining} s"));
+                                } else if entry.otp_type == OtpType::Hotp
+                                    && ui
+                                        .button(RichText::new("⟳").size(18.0))
+                                        .on_hover_text(format!("Next code (counter {})", entry.counter))
+                                        .clicked()
+                                {
+                                    actions.push(Action::NextCounter(idx));
+                                }
+                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    if needs_pin {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut **pin)
+                                                .password(true)
+                                                .hint_text("Enter PIN")
+                                                .desired_width(120.0),
+                                        );
+                                        return;
+                                    }
+                                    let shown = if revealed {
+                                        otp::group_token(&token.code, settings.group_size)
+                                    } else {
+                                        "•".repeat(token.code.chars().count())
+                                    };
+                                    let color = if token.is_expiring() {
+                                        ui.visuals().error_fg_color
+                                    } else {
+                                        ui.visuals().hyperlink_color
+                                    };
+                                    ui.label(RichText::new(shown).monospace().size(30.0).color(color));
+                                    if revealed
+                                        && settings.show_previous
+                                        && let Some(prev) = &token.previous
+                                    {
+                                        ui.label(
+                                            RichText::new(otp::group_token(prev, settings.group_size))
+                                                .monospace()
+                                                .weak(),
+                                        )
+                                        .on_hover_text("Previous token");
+                                    }
+                                });
+                            });
+                        });
                     });
-                    if ui.button("🗐").on_hover_text("Copy").clicked() {
-                        actions.push(Action::Copy(idx));
-                    }
-                    if let Some(remaining) = token.remaining {
-                        widgets::countdown(ui, token.progress(), remaining, token.is_expiring(), 34.0)
-                            .on_hover_text(format!("Changes in {remaining} s"));
-                    } else if entry.otp_type == OtpType::Hotp
-                        && ui.button("⟳").on_hover_text(format!("Next code (counter {})", entry.counter)).clicked()
-                    {
-                        actions.push(Action::NextCounter(idx));
-                    }
-
-                    if entry.otp_type == OtpType::Motp && token.remaining.is_none() {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut **pin).password(true).hint_text("PIN").desired_width(70.0),
-                        );
-                        return;
-                    }
-                    let shown = if revealed {
-                        otp::group_token(&token.code, settings.group_size)
-                    } else {
-                        "•".repeat(token.code.chars().count())
-                    };
-                    let color = if token.is_expiring() {
-                        ui.visuals().error_fg_color
-                    } else {
-                        ui.visuals().strong_text_color()
-                    };
-                    let code = ui
-                        .add(
-                            egui::Label::new(RichText::new(shown).monospace().size(24.0).color(color))
-                                .sense(egui::Sense::click()),
-                        )
-                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(if revealed { "Click to copy" } else { "Click to reveal" });
-                    if code.clicked() {
-                        actions.push(if revealed { Action::Copy(idx) } else { Action::Reveal(idx) });
-                    }
-                    if revealed
-                        && settings.show_previous
-                        && let Some(prev) = &token.previous
-                    {
-                        ui.label(RichText::new(otp::group_token(prev, settings.group_size)).monospace().weak())
-                            .on_hover_text("Previous token");
-                    }
                 });
             });
-        });
+    });
+
+    let response = card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let response = if needs_pin {
+        response
+    } else {
+        response.on_hover_text(if revealed { "Click to copy" } else { "Click to reveal" })
+    };
+    if response.clicked() && !needs_pin {
+        actions.push(if revealed { Action::Copy(idx) } else { Action::Reveal(idx) });
+    }
+}
+
+fn entry_menu(ui: &mut egui::Ui, idx: usize, manual: bool, count: usize, actions: &mut Vec<Action>) {
+    ui.menu_button(RichText::new("⏷").size(16.0), |ui| {
+        if ui.button("🗐 Copy").clicked() {
+            actions.push(Action::Copy(idx));
+        }
+        if ui.button("✏ Edit").clicked() {
+            actions.push(Action::Edit(idx));
+        }
+        if DESKTOP && ui.button("⌨ Type into last window").clicked() {
+            actions.push(Action::Type(idx));
+        }
+        if ui.button("🔳 Show QR code").clicked() {
+            actions.push(Action::ShowQr(idx));
+        }
+        if manual {
+            if idx > 0 && ui.button("⬆ Move up").clicked() {
+                actions.push(Action::MoveUp(idx));
+            }
+            if idx + 1 < count && ui.button("⬇ Move down").clicked() {
+                actions.push(Action::MoveDown(idx));
+            }
+        }
+        ui.separator();
+        if ui.button(RichText::new("🗑 Delete").color(ui.visuals().error_fg_color)).clicked() {
+            actions.push(Action::Delete(idx));
+        }
+    });
 }
 
 /// Draws the open dialog (if any). Returns a message for the toast.

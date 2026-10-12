@@ -37,7 +37,7 @@ const PALETTE: [Color32; 10] = [
 pub fn countdown(ui: &mut egui::Ui, fraction: f32, seconds: u32, warn: bool, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
     let visuals = ui.visuals();
-    let color = if warn { visuals.error_fg_color } else { visuals.selection.bg_fill };
+    let color = if warn { visuals.error_fg_color } else { visuals.hyperlink_color };
     let center = rect.center();
     let radius = size / 2.0 - 2.0;
     let painter = ui.painter();

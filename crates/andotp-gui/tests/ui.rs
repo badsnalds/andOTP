@@ -198,3 +198,24 @@ fn dismissed_keyboard_stays_closed() {
         assert!(harness.output().platform_output.ime.is_none(), "the keyboard came back");
     }
 }
+
+/// Tapping anywhere on an account card copies its token.
+#[test]
+fn tapping_a_card_copies_the_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = vault_with_entries(dir.path());
+    let mut harness = harness(&path);
+    unlock(&mut harness, PASSWORD);
+    wait_for(&mut harness, "the entry list", |h| shows(h, "octocat"));
+
+    // Tap the account name, not the code itself: the whole card is the target.
+    harness.query_by(|n| n.role() == Role::Label && n.value().as_deref() == Some("counter")).unwrap().click();
+    harness.step();
+    let copied = harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .any(|c| matches!(c, eframe::egui::OutputCommand::CopyText(text) if text == "755224"));
+    assert!(copied, "the HOTP token was not copied");
+}
