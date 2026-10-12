@@ -5,6 +5,7 @@ pub mod android;
 mod app;
 mod form;
 pub mod renderer;
+mod thumbnails;
 #[cfg(all(feature = "webcam", not(target_os = "android")))]
 mod webcam;
 mod widgets;

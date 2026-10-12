@@ -858,7 +858,13 @@ fn entry_card(
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    widgets::letter_avatar(ui, title, 44.0);
+                    // Entries created before thumbnails existed (or by other apps) say "Default":
+                    // still try to recognise the issuer.
+                    let thumbnail = match entry.thumbnail.as_str() {
+                        andotp_core::thumbnail::DEFAULT => andotp_core::thumbnail::for_issuer(&entry.issuer),
+                        name => name,
+                    };
+                    widgets::service_icon(ui, thumbnail, title, 44.0);
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
                         // Line 1: name (cut short with … when too long) and the actions menu.

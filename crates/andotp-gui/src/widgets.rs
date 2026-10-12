@@ -5,6 +5,12 @@ use eframe::egui::{self, Color32, Pos2, Shape, Stroke, Vec2};
 /// A coloured circle with the first letter of `name`, like the Android app's letter thumbnails.
 pub fn letter_avatar(ui: &mut egui::Ui, name: &str, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    paint_letter_avatar(ui, rect, name);
+    response
+}
+
+fn paint_letter_avatar(ui: &egui::Ui, rect: egui::Rect, name: &str) {
+    let size = rect.width();
     let letter = name.trim().chars().next().map_or('#', |c| c.to_uppercase().next().unwrap_or(c));
     let hash = name.to_lowercase().bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
     let color = PALETTE[(hash as usize) % PALETTE.len()];
@@ -17,7 +23,6 @@ pub fn letter_avatar(ui: &mut egui::Ui, name: &str, size: f32) -> egui::Response
         egui::FontId::proportional(size * 0.5),
         Color32::WHITE,
     );
-    response
 }
 
 const PALETTE: [Color32; 10] = [
@@ -104,6 +109,33 @@ pub fn decode_otpauth(image: &image::GrayImage) -> Option<String> {
         .into_iter()
         .filter_map(|grid| grid.decode().ok().map(|(_, content)| content))
         .find(|content| content.to_ascii_lowercase().starts_with("otpauth://"))
+}
+
+/// The service logo for `thumbnail` on a white disc, or the letter avatar when there is none.
+pub fn service_icon(ui: &mut egui::Ui, thumbnail: &str, name: &str, size: f32) -> egui::Response {
+    let Some(svg) = crate::thumbnails::svg(thumbnail) else {
+        return letter_avatar(ui, name, size);
+    };
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    // Logos are designed for light backgrounds; the disc keeps dark ones visible in dark mode.
+    ui.painter().circle_filled(rect.center(), size / 2.0, Color32::WHITE);
+    let logo = size * 0.62;
+    let px = (logo * ui.ctx().pixels_per_point()).round().max(1.0) as u32;
+    let id = egui::Id::new(("thumbnail", thumbnail, px));
+    let texture = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id)).or_else(|| {
+        let image = crate::thumbnails::rasterize(svg, px)?;
+        let texture = ui.ctx().load_texture(format!("thumb-{thumbnail}"), image, egui::TextureOptions::LINEAR);
+        ui.ctx().data_mut(|d| d.insert_temp(id, texture.clone()));
+        Some(texture)
+    });
+    match texture {
+        Some(texture) => {
+            let logo_rect = egui::Rect::from_center_size(rect.center(), Vec2::splat(logo));
+            egui::Image::new(&texture).paint_at(ui, logo_rect);
+        }
+        None => paint_letter_avatar(ui, rect, name),
+    }
+    response
 }
 
 #[cfg(test)]

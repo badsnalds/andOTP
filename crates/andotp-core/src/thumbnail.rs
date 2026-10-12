@@ -60,6 +60,7 @@ pub const NAMES: &[&str] = &[
     "BraveRewards",
     "Bugcrowd",
     "CEXio",
+    "Charles_Schwab",
     "ChurchTools",
     "CircleCi",
     "Cisco",
@@ -395,5 +396,6 @@ mod tests {
         assert_eq!(for_issuer("Gitlabber"), DEFAULT);
         assert_eq!(for_issuer("Unknown corp"), DEFAULT);
         assert_eq!(lookup("steam"), Some("Steam"));
+        assert_eq!(lookup("charles_schwab"), Some("Charles_Schwab"));
     }
 }

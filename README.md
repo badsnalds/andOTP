@@ -23,7 +23,8 @@ phone and import here, or the other way around.
 * **`otpauth://` URIs**: add accounts from links, QR-code images or the webcam, and show any account
   as a QR code to move it to a phone.
 * **Organisation**: tags (match any or all), search, sorting (manual, issuer, label, last used, most used)
-  and andOTP's issuer thumbnail names.
+  and logos for about 350 known services. These are andOTP's original thumbnails, bundled with the app;
+  nothing is downloaded, so no server learns which accounts you have.
 * **Desktop app**: light/dark/system theme, a countdown ring, click to copy, optional hide-until-clicked,
   digit grouping and auto-lock after inactivity.
 * **Desktop versions of the Android-only features**:

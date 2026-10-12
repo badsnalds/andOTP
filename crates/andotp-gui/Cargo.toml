@@ -18,6 +18,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 directories = "6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 qrcode = { version = "0.14", default-features = false }
+# Service logos (SVG). No text rendering or image formats needed.
+resvg = { version = "0.48", default-features = false }
 rqrr = "0.11"
 serde = { version = "1", features = ["derive"] }
 zeroize = "1"

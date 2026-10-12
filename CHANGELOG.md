@@ -19,6 +19,9 @@
  * New: panic wipe in the desktop app and `andotp panic`
  * New: webcam QR code scanning (optional `webcam` feature, on by default)
  * New: OpenGL or wgpu renderer, selectable in the settings or with `ANDOTP_RENDERER`
+ * New: logos for about 350 known services (the original andOTP thumbnails, converted to SVG and bundled; `tools/vector2svg.py`)
+ * New: account cards redesigned for phones (two lines, tap to copy, larger touch targets)
+ * Bugfix: the `Charles_Schwab` thumbnail name was missing from the service list
  * New: Android app built from the same Rust UI, with the system file picker for import/export, QR scanning from images and a sensitive clipboard; CI builds the APK and checks it on an emulator
 
 #### v0.9.0.1
