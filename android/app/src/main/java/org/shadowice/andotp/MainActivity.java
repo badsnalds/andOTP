@@ -422,6 +422,14 @@ public class MainActivity extends NativeActivity {
         if (image == null) {
             return;
         }
+        synchronized (this) {
+            // The app has not taken the previous frame yet: skip this one instead of copying
+            // frames nobody will look at.
+            if (!cameraWanted || cameraFrame != null) {
+                image.close();
+                return;
+            }
+        }
         try {
             int width = image.getWidth();
             int height = image.getHeight();
