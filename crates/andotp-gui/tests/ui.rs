@@ -169,3 +169,17 @@ fn wipe_requires_confirmation_and_destroys_vault() {
     assert!(!path.exists());
     assert_shows(&harness, "Create a password to protect your accounts");
 }
+
+/// Re-requesting focus every frame restarts the input method, which makes the Android on-screen
+/// keyboard hide and show again (blink) while the lock screen is open.
+#[test]
+fn lock_screen_does_not_restart_the_keyboard() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut harness = harness(&dir.path().join("new.aes"));
+    harness.run_steps(3);
+    for _ in 0..5 {
+        harness.step();
+        let ime = harness.output().platform_output.ime.as_ref().expect("the password field should want the keyboard");
+        assert!(!ime.should_interrupt_composition, "the keyboard was restarted");
+    }
+}

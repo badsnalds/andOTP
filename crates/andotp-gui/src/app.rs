@@ -361,7 +361,9 @@ impl AndOtpApp {
                         .hint_text("Password")
                         .desired_width(width),
                 );
-                if !busy && lock.password.is_empty() && lock.error.is_none() {
+                // Focus the field once. Requesting focus restarts the input method, so doing it
+                // every frame makes the Android keyboard blink.
+                if !busy && lock.password.is_empty() && lock.error.is_none() && nothing_focused(ui) {
                     pw.request_focus();
                 }
                 let mut submit = pw.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -992,7 +994,9 @@ fn dialog_ui(
                 ui.heading("Encrypted backup");
                 ui.label("Enter the password of the backup:");
                 let edit = ui.add(egui::TextEdit::singleline(&mut **password).password(true));
-                edit.request_focus();
+                if nothing_focused(ui) {
+                    edit.request_focus();
+                }
                 if let Some(err) = error {
                     ui.colored_label(ui.visuals().error_fg_color, err.as_str());
                 }
@@ -1342,6 +1346,11 @@ fn dialog_ui(
         session.dialog = next_dialog;
     }
     message
+}
+
+/// Whether no widget has the keyboard focus (so focusing one will not steal it or restart the IME).
+fn nothing_focused(ui: &egui::Ui) -> bool {
+    ui.memory(|m| m.focused().is_none())
 }
 
 fn apply_theme(ctx: &egui::Context, theme: Theme) {
