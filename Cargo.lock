@@ -267,6 +267,7 @@ dependencies = [
  "rfd",
  "rqrr",
  "serde",
+ "serde_json",
  "tempfile",
  "winit",
  "zeroize",

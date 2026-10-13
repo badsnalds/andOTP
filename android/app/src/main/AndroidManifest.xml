@@ -30,5 +30,29 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Passkey provider (Android 14+): Settings > Passwords, passkeys & accounts. -->
+        <service
+            android:name=".passkey.PasskeyService"
+            android:enabled="@bool/passkeys_supported"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.credentials.CredentialProviderService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.credentials.provider"
+                android:resource="@xml/passkey_provider" />
+        </service>
+
+        <!-- Creates and uses passkeys; shows only the system fingerprint / screen-lock prompt. -->
+        <activity
+            android:name=".passkey.PasskeyActivity"
+            android:enabled="@bool/passkeys_supported"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

@@ -35,6 +35,8 @@ jobs:
             echo "$so"
             "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf -d "$so" | grep NEEDED
           done
+      - name: Check passkey responses against py_webauthn
+        run: android/scripts/webauthn-check.sh
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
