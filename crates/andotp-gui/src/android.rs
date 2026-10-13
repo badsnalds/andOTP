@@ -245,3 +245,51 @@ pub fn take_biometric_result() -> Option<Result<zeroize::Zeroizing<String>, Opti
     .ok()
     .flatten()
 }
+
+/// A passkey stored by the passkey provider (Android 14+), as listed by `PasskeyStore`.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Passkey {
+    pub credential_id: String,
+    pub rp_id: String,
+    #[serde(default)]
+    pub rp_name: String,
+    #[serde(default)]
+    pub user_name: String,
+    #[serde(default)]
+    pub display_name: String,
+    /// Milliseconds since the epoch.
+    #[serde(default)]
+    pub created: i64,
+}
+
+/// andOTP can be a passkey provider here (Android 14+).
+pub fn passkeys_supported() -> bool {
+    call_bool("passkeysSupported")
+}
+
+pub fn passkey_list() -> Vec<Passkey> {
+    let json = with_activity(|env, activity| {
+        let list = env.call_method(activity, "passkeyList", "()Ljava/lang/String;", &[])?.l()?;
+        let list: String = env.get_string(&JString::from(list))?.into();
+        Ok(list)
+    })
+    .unwrap_or_default();
+    serde_json::from_str(&json).unwrap_or_default()
+}
+
+pub fn passkey_delete(credential_id: &str) {
+    let _ = with_activity(|env, activity| {
+        let id = env.new_string(credential_id)?;
+        env.call_method(activity, "passkeyDelete", "(Ljava/lang/String;)V", &[JValue::Object(&id)])?;
+        Ok(())
+    });
+}
+
+/// Opens the system screen for choosing passkey providers.
+pub fn open_passkey_settings() {
+    let _ = with_activity(|env, activity| {
+        env.call_method(activity, "openPasskeySettings", "()V", &[])?;
+        Ok(())
+    });
+}

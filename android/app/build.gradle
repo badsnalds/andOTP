@@ -42,3 +42,8 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 }
+
+dependencies {
+    // Passkey provider API (Android 14+).
+    implementation 'androidx.credentials:credentials:1.5.0'
+}

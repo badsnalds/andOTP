@@ -47,6 +47,28 @@ gradle -p android assembleRelease          # → android/app/build/outputs/apk/r
 * Fingerprint unlock (Android 11+) takes the place of the system keychain: Settings →
   Fingerprint unlock. The password is encrypted with an Android Keystore key that is released
   only after a strong biometric check and stops working when the enrolled fingerprints change.
+* Passkeys (Android 14+): andOTP can store passkeys for websites and apps. Turn it on under
+  Android Settings → Passwords, passkeys & accounts (or andOTP Settings → Passkeys → Open), then
+  choose "Create a passkey" on a site. Details below.
 * Not available on Android: typing into other apps, automatic backup
   folders and the renderer choice.
 * Screenshots of the app are blocked (`FLAG_SECURE`) in release builds.
+
+## Passkeys
+
+andOTP is a passkey provider for the Android Credential Manager (Android 14 and later).
+Browsers and apps that support passkeys offer andOTP in the system passkey sheet once it is
+turned on in Settings → Passwords, passkeys & accounts.
+
+* **Phone-only**: each passkey is a P-256 key created inside the Android Keystore (hardware
+  backed where the phone has it). It cannot be exported, so passkeys are **not** part of andOTP
+  backups and are not synced. Keep another way to sign in (the site's recovery codes, a second
+  passkey or security key).
+* Every use needs your fingerprint or screen lock; nothing is signed without it.
+* Browsers on [Google's list of privileged browsers](https://www.gstatic.com/gpm-passkeys-privileged-apps/apps.json)
+  (bundled as `app/src/main/assets/privileged_browsers.json`) pass the web origin; other apps
+  are identified by the hash of their signing certificate (`android:apk-key-hash:…`).
+* andOTP Settings → Passkeys lists the stored passkeys and deletes them. Deleting one on the
+  phone does not remove it from the site; remove it in the site's account settings too.
+* `scripts/webauthn-check.sh` verifies the registration and sign-in responses against
+  [py_webauthn](https://github.com/duo-labs/py_webauthn), as a website would (runs in CI).

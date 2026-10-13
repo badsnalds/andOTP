@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Passkeys need the Credential Manager provider API of Android 14 (see values-v34). -->
+    <bool name="passkeys_supported">false</bool>
+</resources>

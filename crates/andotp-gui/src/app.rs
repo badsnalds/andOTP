@@ -241,6 +241,12 @@ enum Dialog {
     #[cfg(camera)]
     Scan(scanner::Scanner),
     Settings,
+    /// Passkeys stored by the Android passkey provider; `confirm` is the one about to be deleted.
+    #[cfg(target_os = "android")]
+    Passkeys {
+        list: Vec<crate::android::Passkey>,
+        confirm: Option<usize>,
+    },
     About,
 }
 
@@ -1359,6 +1365,33 @@ fn dialog_ui(
                         }
                     }
                 }
+                // Android 14+: andOTP as a passkey provider for websites and apps.
+                #[cfg(target_os = "android")]
+                if crate::android::passkeys_supported() {
+                    style::section(ui, "Passkeys");
+                    let count = crate::android::passkey_list().len();
+                    let description = match count {
+                        0 => "None yet. Stored on this phone only".to_owned(),
+                        1 => "1 passkey on this phone".to_owned(),
+                        n => format!("{n} passkeys on this phone"),
+                    };
+                    let manage = style::setting_row(ui, "Saved passkeys", &description, 90.0, |ui| {
+                        ui.add(style::secondary("Manage").min_size(egui::vec2(80.0, 32.0))).clicked()
+                    });
+                    if manage {
+                        next_dialog = Some(Dialog::Passkeys { list: crate::android::passkey_list(), confirm: None });
+                    }
+                    let open = style::setting_row(
+                        ui,
+                        "Use andOTP for passkeys",
+                        "Choose andOTP in Android's passkey settings",
+                        90.0,
+                        |ui| ui.add(style::secondary("Open").min_size(egui::vec2(80.0, 32.0))).clicked(),
+                    );
+                    if open {
+                        crate::android::open_passkey_settings();
+                    }
+                }
                 // Desktop only: on Android these need platform services we do not use.
                 if DESKTOP {
                     let mut keychain_on = settings.keychain;
@@ -1572,6 +1605,89 @@ fn dialog_ui(
                 style::button_row(ui, |ui| {
                     if style::secondary_button(ui, "Cancel").clicked() {
                         close = true;
+                    }
+                });
+            }
+            #[cfg(target_os = "android")]
+            Dialog::Passkeys { list, confirm } => {
+                style::header(
+                    ui,
+                    "Passkeys",
+                    "Sign-in keys for websites and apps, kept on this phone only and unlocked with your \
+                     fingerprint or screen lock. They are not part of andOTP backups.",
+                );
+                if list.is_empty() {
+                    style::alert(
+                        ui,
+                        theme::primary_text(ui),
+                        "No passkeys yet. Turn on andOTP in Android's passkey settings, then choose \
+                         \"Create a passkey\" on a website or in an app.",
+                    );
+                }
+                let mut delete = None;
+                for (i, passkey) in list.iter().enumerate() {
+                    let card = egui::Frame::new()
+                        .fill(ui.visuals().window_fill)
+                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                        .corner_radius(theme::RADIUS_MD)
+                        .inner_margin(egui::Margin::symmetric(12, 10));
+                    card.show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            let title = if passkey.rp_name.is_empty() { &passkey.rp_id } else { &passkey.rp_name };
+                            widgets::service_icon(ui, andotp_core::thumbnail::for_issuer(title), title, 36.0);
+                            ui.vertical(|ui| {
+                                ui.set_max_width(ui.available_width() - 44.0);
+                                ui.add(egui::Label::new(theme::semibold(title.as_str(), 14.0)).truncate());
+                                let user = if passkey.user_name.is_empty() {
+                                    &passkey.display_name
+                                } else {
+                                    &passkey.user_name
+                                };
+                                ui.add(egui::Label::new(RichText::new(user.as_str()).size(12.0).weak()).truncate());
+                                ui.add(
+                                    egui::Label::new(RichText::new(passkey.rp_id.as_str()).size(11.0).weak())
+                                        .truncate(),
+                                );
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add(style::icon_button("🗑")).on_hover_text("Delete").clicked() {
+                                    *confirm = Some(i);
+                                }
+                            });
+                        });
+                        if *confirm == Some(i) {
+                            ui.add_space(6.0);
+                            style::alert(
+                                ui,
+                                ui.visuals().error_fg_color,
+                                "Delete this passkey? You can no longer sign in with it. Remove it from the \
+                                 site's account settings too.",
+                            );
+                            style::button_row(ui, |ui| {
+                                if style::danger_button(ui, "Delete", true).clicked() {
+                                    delete = Some(i);
+                                }
+                                if style::secondary_button(ui, "Keep").clicked() {
+                                    *confirm = None;
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                if let Some(i) = delete {
+                    crate::android::passkey_delete(&list[i].credential_id);
+                    *list = crate::android::passkey_list();
+                    *confirm = None;
+                    message = Some(("Passkey deleted".into(), false));
+                }
+                style::button_row(ui, |ui| {
+                    if style::secondary_button(ui, "Close").clicked() {
+                        close = true;
+                    }
+                    if ui.add(style::secondary("Android settings…").min_size(egui::vec2(80.0, 36.0))).clicked() {
+                        crate::android::open_passkey_settings();
                     }
                 });
             }

@@ -493,6 +493,42 @@ public class MainActivity extends NativeActivity {
         }
     }
 
+    /** Whether andOTP can act as a passkey provider (Android 14+). */
+    public boolean passkeysSupported() {
+        return Build.VERSION.SDK_INT >= 34;
+    }
+
+    /** The stored passkeys as a JSON array (no key material). */
+    public String passkeyList() {
+        if (Build.VERSION.SDK_INT < 34) {
+            return "[]";
+        }
+        return org.shadowice.andotp.passkey.PasskeyStore.listJson(this);
+    }
+
+    /** Deletes a passkey and its Keystore key. */
+    public void passkeyDelete(String credentialId) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            org.shadowice.andotp.passkey.PasskeyStore.delete(this, credentialId);
+        }
+    }
+
+    /** Opens the system screen where the user picks andOTP as a passkey provider. */
+    public void openPasskeySettings() {
+        runOnUiThread(() -> {
+            try {
+                startActivity(new Intent("android.settings.CREDENTIAL_PROVIDER")
+                        .setData(Uri.parse("package:" + getPackageName())));
+            } catch (Exception e) {
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
+                } catch (Exception ignored) {
+                    post("!Open Settings > Passwords, passkeys & accounts and turn on andOTP");
+                }
+            }
+        });
+    }
+
     /** Whether this device can do fingerprint unlock (Android 11+ with a strong biometric enrolled). */
     public boolean biometricAvailable() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
